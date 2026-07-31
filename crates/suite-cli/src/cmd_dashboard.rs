@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::Args;
-use packet28_daemon_core::{load_task_registry, task_artifact_dir};
+use packet28_daemon_core::storage::load_task_registry;
+use packet28_daemon_protocol::paths::{task_artifact_dir, TaskStorageId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -540,13 +541,12 @@ fn context_anomaly_history_record(payload: &Value) -> ContextAnomalyHistoryRecor
 
 fn reducer_drift_tile(root: &Path) -> Result<ReducerDriftTile> {
     let records = load_reducer_drift_history(root, 32)?;
-    if records.is_empty() {
+    let Some(latest) = records.last() else {
         return Ok(ReducerDriftTile {
             latest_status: "none".to_string(),
             ..ReducerDriftTile::default()
         });
-    }
-    let latest = records.last().expect("non-empty reducer drift history");
+    };
     let mut counts = BTreeMap::<String, usize>::new();
     for record in &records {
         for kind in &record.issue_kinds {
@@ -569,13 +569,12 @@ fn reducer_drift_tile(root: &Path) -> Result<ReducerDriftTile> {
 
 fn memory_lint_tile(root: &Path) -> Result<MemoryLintTile> {
     let records = load_memory_lint_history(root, 32)?;
-    if records.is_empty() {
+    let Some(latest) = records.last() else {
         return Ok(MemoryLintTile {
             latest_status: "none".to_string(),
             ..MemoryLintTile::default()
         });
-    }
-    let latest = records.last().expect("non-empty memory lint history");
+    };
     let mut counts = BTreeMap::<String, usize>::new();
     for record in &records {
         for kind in &record.issue_kinds {
@@ -601,13 +600,12 @@ fn context_anomaly_tile(root: &Path, history_path: Option<&Path>) -> Result<Cont
         Some(path) => load_context_anomaly_history_from_path(path, 32)?,
         None => load_context_anomaly_history(root, 32)?,
     };
-    if records.is_empty() {
+    let Some(latest) = records.last() else {
         return Ok(ContextAnomalyTile {
             latest_status: "none".to_string(),
             ..ContextAnomalyTile::default()
         });
-    }
-    let latest = records.last().expect("non-empty context anomaly history");
+    };
     let (latest_age_ms, oldest_recurring_hidden_age_ms) =
         context_anomaly_age_summary(&records, now_unix_ms());
     Ok(ContextAnomalyTile {
@@ -947,6 +945,9 @@ fn context_anomaly_category_rank(category: &str) -> usize {
 fn handoff_readiness_tile(root: &Path) -> Result<HandoffReadinessTile> {
     let mut records = Vec::<Vec<String>>::new();
     for task_id in dashboard_task_ids(root)? {
+        let Ok(task_id) = TaskStorageId::try_from(task_id) else {
+            continue;
+        };
         let versions_dir = task_artifact_dir(root, &task_id).join("versions");
         if !versions_dir.exists() {
             continue;
@@ -1008,7 +1009,8 @@ fn dashboard_task_ids(root: &Path) -> Result<Vec<String>> {
     let mut ids = load_task_registry(root)
         .map(|registry| registry.tasks.into_keys().collect::<Vec<_>>())
         .unwrap_or_default();
-    let probe = task_artifact_dir(root, "__packet28_probe__");
+    let probe_id = TaskStorageId::try_from("__packet28_probe__")?;
+    let probe = task_artifact_dir(root, &probe_id);
     if let Some(tasks_dir) = probe.parent() {
         if tasks_dir.exists() {
             for entry in fs::read_dir(tasks_dir)? {

@@ -11,17 +11,19 @@ jobs:
       pull-requests: write
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.93.1
 
       - name: Build all CLI binaries
-        run: cargo build --release -p covy-cli -p diffy-cli -p testy-cli -p suite-cli
+        run: cargo build --locked --release -p covy-cli -p diffy-cli -p testy-cli -p suite-cli
 
       - name: Run workspace tests
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
       - name: Smoke all CLI command surfaces
         run: |
@@ -61,7 +63,7 @@ jobs:
           fi
 
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@4187e74d05793876e9989daffde9c3e66b4acd07 # v3
         with:
           sarif_file: covy.sarif
 

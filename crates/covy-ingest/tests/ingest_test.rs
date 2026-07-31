@@ -1,5 +1,8 @@
 use std::path::PathBuf;
 
+use covy_core::diagnostics::{DiagnosticsData, DiagnosticsFormat};
+use covy_core::CovyError;
+
 fn fixture(rel: &str) -> PathBuf {
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -128,4 +131,60 @@ fn test_detect_diagnostics_format_sarif() {
     let format =
         covy_ingest::detect_diagnostics_format(std::path::Path::new("x.sarif"), content).unwrap();
     assert_eq!(format, covy_core::diagnostics::DiagnosticsFormat::Sarif);
+}
+
+fn diagnostics_result_signature(
+    result: Result<DiagnosticsData, CovyError>,
+) -> Result<serde_json::Value, String> {
+    result
+        .map(|mut diagnostics| {
+            diagnostics.timestamp = 0;
+            serde_json::to_value(diagnostics).unwrap()
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[test]
+fn diagnostics_path_and_reader_match_across_input_boundaries() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases: &[(&str, &[u8])] = &[
+        ("empty", b""),
+        ("whitespace", b" \n\t"),
+        ("minimal-object", br#"{}"#),
+        ("empty-runs", br#"{"version":"2.1.0","runs":[]}"#),
+        ("malformed", br#"{"version":"2.1.0","runs":["#),
+        ("invalid-utf8", b"{\"runs\":[]}\xff"),
+    ];
+
+    for (name, content) in cases {
+        let path = dir.path().join(format!("{name}.sarif"));
+        std::fs::write(&path, content).unwrap();
+
+        let from_path = diagnostics_result_signature(covy_ingest::ingest_diagnostics_path(&path));
+        let from_reader = diagnostics_result_signature(covy_ingest::ingest_diagnostics_reader(
+            std::io::Cursor::new(*content),
+            DiagnosticsFormat::Sarif,
+        ));
+
+        assert_eq!(
+            from_path, from_reader,
+            "path and reader ingestion diverged for {name}"
+        );
+    }
+}
+
+#[test]
+fn diagnostics_single_buffer_parser_matches_public_entry_points() {
+    let path = fixture("sarif/basic.sarif");
+    let content = std::fs::read(&path).unwrap();
+
+    let from_path = diagnostics_result_signature(covy_ingest::ingest_diagnostics_path(&path));
+    let from_reader = diagnostics_result_signature(covy_ingest::ingest_diagnostics_reader(
+        std::io::Cursor::new(&content),
+        DiagnosticsFormat::Sarif,
+    ));
+    let direct = diagnostics_result_signature(covy_ingest::sarif::parse_sarif(&content));
+
+    assert_eq!(from_path, from_reader);
+    assert_eq!(from_path, direct);
 }

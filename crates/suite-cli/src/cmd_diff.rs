@@ -64,7 +64,7 @@ pub struct AnalyzeArgs {
     #[arg(long)]
     input: Option<String>,
 
-    /// Persist kernel cache on disk under <cwd>/.packet28
+    /// Persist kernel cache on disk under `<cwd>/.packet28`.
     #[arg(long)]
     cache: bool,
 
@@ -105,7 +105,7 @@ pub fn run(args: AnalyzeArgs, config_path: &str) -> Result<i32> {
     let governed_context_config = args.context_config.clone();
     let governed_budget_tokens = args.context_budget_tokens;
     let governed_budget_bytes = args.context_budget_bytes;
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let cwd = std::env::current_dir()?;
     let machine_profile =
         crate::cmd_common::resolve_machine_profile(args.json, args.report.as_deref(), "--report")?;
@@ -181,7 +181,7 @@ pub fn run(args: AnalyzeArgs, config_path: &str) -> Result<i32> {
     let response = kernel.execute(context_kernel_core::KernelRequest {
         target: "diffy.analyze".to_string(),
         reducer_input: serde_json::to_value(kernel_input)?,
-        policy_context: policy_context.clone(),
+        policy_context,
         ..context_kernel_core::KernelRequest::default()
     })?;
 
@@ -380,7 +380,7 @@ pub fn run_remote(args: AnalyzeArgs, config_path: &str, daemon_root: &Path) -> R
     let governed_context_config = args.context_config.clone();
     let governed_budget_tokens = args.context_budget_tokens;
     let governed_budget_bytes = args.context_budget_bytes;
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let cwd = crate::cmd_common::caller_cwd()?;
     let base = args.base.as_deref().unwrap_or(&config.diff.base);
     let head = args.head.as_deref().unwrap_or(&config.diff.head);
@@ -433,7 +433,7 @@ pub fn run_remote(args: AnalyzeArgs, config_path: &str, daemon_root: &Path) -> R
         context_kernel_core::KernelRequest {
             target: "diffy.analyze".to_string(),
             reducer_input: serde_json::to_value(kernel_input)?,
-            policy_context: policy_context.clone(),
+            policy_context,
             ..context_kernel_core::KernelRequest::default()
         },
     )?;

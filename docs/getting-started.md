@@ -1,0 +1,173 @@
+# Getting started
+
+Packet28 can be used as a standalone CLI, an MCP server, or a persistent
+workspace daemon. The setup command configures the detected agent runtimes
+without replacing malformed or unrelated user configuration.
+
+## Requirements
+
+- macOS or Linux on x64 or arm64 for the packaged binaries;
+- Node.js 18 or newer for the npm wrapper;
+- one supported agent runtime if you want MCP/hooks integration;
+- Git for repository-aware diff, map, and task workflows.
+
+Source builds use the pinned Rust toolchain in `rust-toolchain.toml`. The
+project's declared minimum Rust version is 1.88.0.
+
+## Install
+
+With npm:
+
+```bash
+npm install --global packet28
+packet28 --version
+```
+
+Install-free setup:
+
+```bash
+npx packet28@latest
+```
+
+From source:
+
+```bash
+cargo build --release --locked -p suite-cli -p packet28d
+./target/release/Packet28 --version
+```
+
+The installed wrapper command is lowercase `packet28`; the source-built
+umbrella binary is `Packet28`.
+
+## Configure an agent runtime
+
+From the repository you want Packet28 to manage:
+
+```bash
+packet28 setup --runtime all --yes
+packet28 doctor --root .
+```
+
+Omit `--yes` for the interactive plan. Choose a single runtime slug instead of
+`all` when you do not want every detected integration.
+
+Setup may create or update repository-local MCP, hook, and instruction files
+and user-level runtime configuration. Existing valid JSON/TOML is merged;
+invalid configuration is reported and left unchanged.
+
+## Start the daemon
+
+```bash
+packet28 daemon start --root .
+packet28 daemon status --root . --json
+```
+
+The daemon publishes its selected authenticated endpoint and readiness state in
+`.packet28/daemon/runtime.json`. Clients use that file; do not hard-code a
+socket path.
+
+Stop it with:
+
+```bash
+packet28 daemon stop --root .
+```
+
+## Run MCP
+
+Native server:
+
+```bash
+packet28-mcp --root .
+```
+
+Source build:
+
+```bash
+./target/release/Packet28 mcp serve --root .
+```
+
+Proxy upstream servers:
+
+```bash
+packet28 mcp proxy --root . --upstream-config .mcp.proxy.json
+```
+
+The proxy is useful when upstream tool results should be captured in the same
+task context. Native mode is simpler when Packet28 is the only MCP server.
+
+## Try the core workflows
+
+Search:
+
+```bash
+p28 "AuthService"
+```
+
+Recall:
+
+```bash
+packet28 context recall \
+  --root . \
+  --query "coverage gap AuthService" \
+  --limit 5 \
+  --json
+```
+
+Coverage and diff:
+
+```bash
+packet28 cover check \
+  --coverage coverage/lcov.info \
+  --base main \
+  --head HEAD \
+  --json
+
+packet28 diff analyze \
+  --coverage coverage/lcov.info \
+  --base main \
+  --head HEAD \
+  --json
+```
+
+Diagnostics and repository map:
+
+```bash
+packet28 build reduce --input build.log --json
+packet28 stack slice --input crash.log --json
+packet28 map repo --repo-root . --focus-symbol AuthService --json
+```
+
+Pass `--via-daemon --daemon-root .` to supported commands when you want the
+persistent runtime to own execution.
+
+## Configure project defaults
+
+Copy [covy.toml.example](../covy.toml.example) to `covy.toml`, then set:
+
+- coverage report paths and path-prefix mapping;
+- default diff base/head;
+- total, changed, and new-line coverage gates;
+- changed-line diagnostic limits;
+- test-impact, sharding, cache, and merge behavior.
+
+Use optional `context.yaml` governance for tool/reducer allowlists, path
+constraints, budgets, redaction, and review requirements.
+
+## Understand output profiles
+
+Reducer and context commands use typed packet envelopes.
+
+- compact JSON is the bounded default for agent use;
+- full JSON includes the complete payload;
+- handle output keeps a compact response and persists the full artifact for
+  explicit later retrieval.
+
+Use `packet28 packet fetch` or the matching MCP artifact tool when the compact
+view is insufficient.
+
+## Next
+
+- [Architecture](architecture.md)
+- [Operations](operations.md)
+- [Instruction rendering modes](instruction-rendering-modes.md)
+- [Task-store retention](task-store-retention.md)

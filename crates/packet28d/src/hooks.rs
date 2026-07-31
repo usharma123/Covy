@@ -1,23 +1,39 @@
 use super::*;
-use packet28_daemon_core::{
-    hook_runtime_config_path, HookBoundaryKind, HookEventKind, HookIngestRequest,
-    HookIngestResponse, HookReducerCacheEntry, HookRuntimeConfig, RelaunchPreference,
-    ThresholdLevel,
+#[cfg(test)]
+use crate::broker::broker_write_state;
+use crate::broker::{
+    broker_prepare_handoff, broker_task_status, broker_write_state_batch, ensure_task_record_mut,
+    load_agent_snapshot_for_task, load_task_record, now_unix_millis,
 };
+use packet28_daemon_protocol::hooks::{
+    HookBoundaryKind, HookEventKind, HookIngestRequest, HookIngestResponse, HookReducerCacheEntry,
+    HookRuntimeConfig, RelaunchPreference, ThresholdLevel,
+};
+use packet28_daemon_protocol::paths::hook_runtime_config_path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static HOOK_ARTIFACT_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-fn load_hook_runtime_config(root: &Path) -> HookRuntimeConfig {
+fn load_hook_runtime_config(root: &Path) -> Result<HookRuntimeConfig> {
     let path = hook_runtime_config_path(root);
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<HookRuntimeConfig>(&raw).ok())
-        .unwrap_or_default()
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(HookRuntimeConfig::default());
+        }
+        Err(source) => {
+            return Err(source).with_context(|| {
+                format!("failed to read hook runtime config '{}'", path.display())
+            });
+        }
+    };
+    serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse hook runtime config '{}'", path.display()))
 }
 
 fn store_hook_artifact(root: &Path, task_id: &str, prefix: &str, value: &Value) -> Result<String> {
-    let dir = task_artifact_dir(root, task_id).join("hook-artifacts");
+    let storage_id = task_storage_id(task_id)?;
+    let dir = task_artifact_dir(root, &storage_id).join("hook-artifacts");
     fs::create_dir_all(&dir).with_context(|| format!("failed to create '{}'", dir.display()))?;
     let id = format!(
         "{prefix}-{}-{:x}",
@@ -50,7 +66,8 @@ fn hook_task_additional_context(
     {
         return Ok(None);
     }
-    let path = task_brief_markdown_path(&root, task_id);
+    let storage_id = task_storage_id(task_id)?;
+    let path = task_brief_markdown_path(&root, &storage_id);
     let brief = fs::read_to_string(path).ok();
     {
         let mut guard = state.lock().map_err(lock_err)?;
@@ -59,7 +76,7 @@ fn hook_task_additional_context(
         task.latest_hook_bootstrap_at_unix = Some(now_unix());
         task.latest_hook_session_id = session_id.map(ToOwned::to_owned);
         task.latest_agent_handoff_artifact_id = latest_handoff_artifact_id;
-        persist_state(&guard)?;
+        persist_task(&guard, task_id)?;
     }
     Ok(brief.filter(|value| !value.trim().is_empty()))
 }
@@ -79,11 +96,8 @@ fn maybe_prepare_handoff_from_hooks(
     task_id: &str,
     boundary_kind: HookBoundaryKind,
     host_budget: Option<u64>,
+    config: &HookRuntimeConfig,
 ) -> Result<HookIngestResponse> {
-    let config = {
-        let root = state.lock().map_err(lock_err)?.root.clone();
-        load_hook_runtime_config(&root)
-    };
     let effective_budget = config.effective_budget(host_budget);
     if boundary_kind != HookBoundaryKind::None {
         let mut guard = state.lock().map_err(lock_err)?;
@@ -92,7 +106,7 @@ fn maybe_prepare_handoff_from_hooks(
         task.latest_hook_boundary_kind = Some(format!("{boundary_kind:?}").to_ascii_lowercase());
         task.hook_soft_threshold_tokens = config
             .threshold_tokens_for_level_with_budget(ThresholdLevel::Prepare, effective_budget);
-        persist_state(&guard)?;
+        persist_task(&guard, task_id)?;
     }
     let status = broker_task_status(
         state.clone(),
@@ -165,7 +179,7 @@ fn maybe_prepare_handoff_from_hooks(
             task.hook_threshold_exceeded = false;
             task.hook_window_est_tokens = 0;
             task.hook_window_est_bytes = 0;
-            persist_state(&guard)?;
+            persist_task(&guard, task_id)?;
 
             // Auto-relaunch: when daemon-managed and at a stop boundary with
             // handoff ready, queue a fresh worker launch.
@@ -182,39 +196,17 @@ fn maybe_prepare_handoff_from_hooks(
                 )
                 && !config.relaunch_command.is_empty()
             {
-                response.relaunch_requested = true;
-                let relaunch_task_id = task_id.to_string();
-                let relaunch_command = config.relaunch_command.clone();
-                let relaunch_state = state.clone();
-                thread::spawn(move || {
-                    // Brief delay to let the current session complete its stop.
-                    thread::sleep(Duration::from_millis(500));
-                    let result = task_launch_agent(
-                        relaunch_state,
-                        TaskLaunchAgentRequest {
-                            task_id: relaunch_task_id.clone(),
-                            task: None,
-                            wait_for_handoff: false,
-                            handoff_timeout_ms: None,
-                            handoff_poll_ms: None,
-                            command: relaunch_command,
-                        },
-                    );
-                    match result {
-                        Ok(launched) => {
-                            eprintln!(
-                                "packet28: auto-relaunched agent pid={} task={}",
-                                launched.pid, relaunch_task_id
-                            );
-                        }
-                        Err(err) => {
-                            eprintln!(
-                                "packet28: auto-relaunch failed for task {}: {err:#}",
-                                relaunch_task_id
-                            );
-                        }
-                    }
-                });
+                match guard
+                    .background_tx
+                    .try_send(BackgroundCommand::RelaunchAgent {
+                        task_id: task_id.to_string(),
+                        command: config.relaunch_command.clone(),
+                    }) {
+                    Ok(()) => response.relaunch_requested = true,
+                    Err(error) => daemon_log(&format!(
+                        "auto-relaunch queue rejected task {task_id}: {error}"
+                    )),
+                }
             }
         }
     } else if threshold_exceeded && snapshot.latest_intention.is_none() {
@@ -258,28 +250,28 @@ fn remote_state_cache_ttl_secs(family: &str, kind: &str) -> Option<u64> {
     }
 }
 
-fn lifecycle_kind(lifecycle: &packet28_daemon_core::HookLifecycleEvent) -> Option<&str> {
+fn lifecycle_kind(lifecycle: &packet28_daemon_protocol::hooks::HookLifecycleEvent) -> Option<&str> {
     lifecycle
         .canonical_command_kind
         .as_deref()
         .filter(|value| !value.trim().is_empty())
 }
 
-fn packet_family(packet: &packet28_daemon_core::HookReducerPacket) -> Option<&str> {
+fn packet_family(packet: &packet28_daemon_protocol::hooks::HookReducerPacket) -> Option<&str> {
     packet
         .reducer_family
         .as_deref()
         .filter(|value| !value.trim().is_empty())
 }
 
-fn packet_kind(packet: &packet28_daemon_core::HookReducerPacket) -> Option<&str> {
+fn packet_kind(packet: &packet28_daemon_protocol::hooks::HookReducerPacket) -> Option<&str> {
     packet
         .canonical_command_kind
         .as_deref()
         .filter(|value| !value.trim().is_empty())
 }
 
-fn packet_is_mutation(packet: &packet28_daemon_core::HookReducerPacket) -> bool {
+fn packet_is_mutation(packet: &packet28_daemon_protocol::hooks::HookReducerPacket) -> bool {
     packet.mutation.unwrap_or(false)
         || matches!(
             packet_kind(packet),
@@ -296,7 +288,7 @@ fn packet_touches_rust(paths: &[String]) -> bool {
 
 fn invalidate_epochs_for_packet(
     task: &mut TaskRecord,
-    packet: &packet28_daemon_core::HookReducerPacket,
+    packet: &packet28_daemon_protocol::hooks::HookReducerPacket,
 ) {
     if packet.failed {
         return;
@@ -339,7 +331,7 @@ fn invalidate_epochs_for_packet(
 
 fn cache_hit_for_packet(
     task: &TaskRecord,
-    packet: &packet28_daemon_core::HookReducerPacket,
+    packet: &packet28_daemon_protocol::hooks::HookReducerPacket,
 ) -> bool {
     if packet_is_mutation(packet) {
         return false;
@@ -376,7 +368,7 @@ fn cache_hit_for_packet(
 
 fn update_cache_for_packet(
     task: &mut TaskRecord,
-    packet: &packet28_daemon_core::HookReducerPacket,
+    packet: &packet28_daemon_protocol::hooks::HookReducerPacket,
     artifact_id: Option<String>,
 ) {
     if packet.cacheable != Some(true) {
@@ -419,7 +411,9 @@ fn update_cache_for_packet(
     );
 }
 
-fn packet_workspace_fingerprint(packet: &packet28_daemon_core::HookReducerPacket) -> Option<&str> {
+fn packet_workspace_fingerprint(
+    packet: &packet28_daemon_protocol::hooks::HookReducerPacket,
+) -> Option<&str> {
     packet
         .artifact
         .as_ref()
@@ -430,7 +424,7 @@ fn packet_workspace_fingerprint(packet: &packet28_daemon_core::HookReducerPacket
 
 fn apply_lifecycle_event(
     task: &mut TaskRecord,
-    lifecycle: &packet28_daemon_core::HookLifecycleEvent,
+    lifecycle: &packet28_daemon_protocol::hooks::HookLifecycleEvent,
 ) {
     task.latest_hook_progress_at_unix = Some(now_unix());
     if let Some(command_id) = lifecycle.command_id.as_ref() {
@@ -450,7 +444,7 @@ pub(crate) fn hook_ingest(
         anyhow::bail!("hook ingest requires task_id");
     }
     let root = state.lock().map_err(lock_err)?.root.clone();
-    let config = load_hook_runtime_config(&root);
+    let config = load_hook_runtime_config(&root)?;
     if !config.hooks_enabled {
         return Ok(HookIngestResponse {
             task_id: task_id.to_string(),
@@ -472,7 +466,7 @@ pub(crate) fn hook_ingest(
         if let Some(lifecycle) = request.lifecycle_event.as_ref() {
             apply_lifecycle_event(task, lifecycle);
         }
-        persist_state(&guard)?;
+        persist_task(&guard, task_id)?;
     }
 
     let host_budget = request.host_context_budget_tokens;
@@ -484,17 +478,24 @@ pub(crate) fn hook_ingest(
             task_id: task_id.to_string(),
             accepted: true,
             additional_context,
-            ..maybe_prepare_handoff_from_hooks(state, task_id, HookBoundaryKind::None, host_budget)?
+            ..maybe_prepare_handoff_from_hooks(
+                state,
+                task_id,
+                HookBoundaryKind::None,
+                host_budget,
+                &config,
+            )?
         });
     }
 
     let mut cache_hit = false;
     if let Some(packet) = request.reducer_packet.as_ref() {
-        let artifact_id = packet
-            .artifact
-            .as_ref()
-            .map(|artifact| store_hook_artifact(&root, task_id, "hook", artifact))
-            .transpose()?;
+        let artifact_id = if let Some(artifact) = packet.artifact.as_ref() {
+            fence_task_namespace_admission(&state, task_id)?;
+            Some(store_hook_artifact(&root, task_id, "hook", artifact)?)
+        } else {
+            None
+        };
         {
             let mut guard = state.lock().map_err(lock_err)?;
             let task = ensure_task_record_mut(&mut guard.tasks, task_id);
@@ -506,7 +507,7 @@ pub(crate) fn hook_ingest(
             if let Some(kind) = packet_kind(packet) {
                 task.latest_hook_command_kind = Some(kind.to_string());
             }
-            persist_state(&guard)?;
+            persist_task(&guard, task_id)?;
         }
 
         if !cache_hit {
@@ -538,7 +539,7 @@ pub(crate) fn hook_ingest(
                 paths: packet.paths.clone(),
                 regions: packet.regions.clone(),
                 symbols: packet.symbols.clone(),
-                artifact_id: artifact_id.clone(),
+                artifact_id,
                 raw_artifact_handle: packet.raw_artifact_handle.clone(),
                 raw_artifact_available: Some(packet.raw_artifact_available),
                 duration_ms: packet.duration_ms,
@@ -589,13 +590,18 @@ pub(crate) fn hook_ingest(
                     task.hook_window_est_bytes.saturating_add(packet.est_bytes);
                 // Use graduated threshold: exceeded at Prepare level or above.
                 task.hook_threshold_exceeded = task.hook_window_est_tokens >= prepare_threshold;
-                persist_state(&guard)?;
+                persist_task(&guard, task_id)?;
             }
         }
     }
 
-    let mut response =
-        maybe_prepare_handoff_from_hooks(state, task_id, request.boundary_kind, host_budget)?;
+    let mut response = maybe_prepare_handoff_from_hooks(
+        state,
+        task_id,
+        request.boundary_kind,
+        host_budget,
+        &config,
+    )?;
     response.cache_hit = cache_hit;
     Ok(response)
 }

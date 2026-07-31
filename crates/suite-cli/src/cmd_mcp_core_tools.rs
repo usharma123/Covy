@@ -3,7 +3,9 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
-use packet28_daemon_core::{hook_runtime_config_path, load_task_registry};
+use packet28_daemon_core::storage::{load_task_registry, now_unix};
+use packet28_daemon_protocol::hooks::ActiveTaskRecord;
+use packet28_daemon_protocol::paths::hook_runtime_config_path;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -99,7 +101,7 @@ pub(super) fn handle_core_tool_call(
                 other => {
                     return Err(anyhow!(
                         "packet28.hypothesis_resolve status must be confirmed or rejected, got '{other}'"
-                    ))
+                    ));
                 }
             };
             let task_id = request.task_id.as_deref().unwrap_or_default();
@@ -137,10 +139,10 @@ pub(super) fn handle_core_tool_call(
             track_task(session, root, &request.task_id)?;
             crate::task_runtime::store_active_task(
                 root,
-                &packet28_daemon_core::ActiveTaskRecord {
+                &ActiveTaskRecord {
                     task_id: request.task_id.clone(),
                     session_id: None,
-                    updated_at_unix: packet28_daemon_core::now_unix(),
+                    updated_at_unix: now_unix(),
                 },
             )?;
             handle_packet28_write_intention(root, session, request)?
@@ -247,7 +249,7 @@ pub(super) fn handle_packet28_agent_status(root: &Path, arguments: Value) -> Res
     }
 
     let request = serde_json::from_value::<AgentStatusArgs>(arguments).unwrap_or_default();
-    let active = crate::task_runtime::load_active_task(root);
+    let active = crate::task_runtime::load_active_task(root)?;
     let task_id = request
         .task_id
         .or_else(|| active.as_ref().map(|record| record.task_id.clone()));

@@ -1,0 +1,44 @@
+[package]
+name = "packet28-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+rust-version = "1.88"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+covy-ingest = { path = "../crates/covy-ingest" }
+libfuzzer-sys = "0.4"
+packet28-daemon-protocol = { path = "../crates/packet28-daemon-protocol" }
+packet28-search-core = { path = "../crates/packet28-search-core" }
+tempfile = "3"
+
+[[bin]]
+name = "daemon_frame"
+path = "fuzz_targets/daemon_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "search_index_bytes"
+path = "fuzz_targets/search_index_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lcov_parser"
+path = "fuzz_targets/lcov_parser.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
+resolver = "2"
+
+[profile.release]
+debug = 1

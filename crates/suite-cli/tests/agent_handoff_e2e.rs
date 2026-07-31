@@ -2,8 +2,12 @@
 mod agent_core;
 #[path = "support/agent_handoff.rs"]
 mod agent_handoff;
-#[path = "support/mcp_io.rs"]
-mod mcp_io;
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use agent_handoff::seed_checkpointed_handoff_task;
 use predicates::prelude::*;

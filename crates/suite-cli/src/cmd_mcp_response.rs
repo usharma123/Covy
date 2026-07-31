@@ -15,231 +15,20 @@ pub(super) fn capabilities_payload() -> Value {
     })
 }
 
+pub(super) fn shape_tool_response(payload: Value, summary: String) -> Value {
+    json!({
+        "content": [
+            {
+                "type": "text",
+                "text": summary
+            }
+        ],
+        "structuredContent": payload
+    })
+}
+
 pub(super) fn summarize_tool_payload(name: &str, payload: &Value) -> String {
     match name {
-        "packet28.search" | "packet28.search_fast" | "packet28.read_regions" | "packet28.glob" => {
-            payload
-                .get("compact_preview")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| "Packet28 compact tool result.".to_string())
-        }
-        "packet28.fetch_tool_result" => {
-            let artifact_id = payload
-                .get("artifact_id")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            format!("Packet28 fetched tool artifact {artifact_id}.")
-        }
-        "packet28.fetch_raw_output" => {
-            let path = payload
-                .get("path")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            format!("Packet28 fetched raw output from {path}.")
-        }
-        "packet28.fetch_context" => {
-            let artifact_id = payload
-                .get("artifact_id")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            format!("Packet28 fetched broker context artifact {artifact_id}.")
-        }
-        "packet28.verify_handoff" => {
-            let ready = payload
-                .get("ready")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let score = payload
-                .get("score")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            format!("Packet28 handoff replay ready={ready} score={score}.")
-        }
-        "packet28.prompt_pressure" => {
-            let pressure = payload
-                .get("pressure")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            let remaining = payload
-                .get("remaining_tokens")
-                .and_then(Value::as_i64)
-                .unwrap_or_default();
-            format!("Packet28 prompt pressure={pressure} remaining_tokens={remaining}.")
-        }
-        "packet28.handoff_diff" => {
-            let delta_count = payload
-                .get("delta_count")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            let top_delta = payload
-                .get("top_delta")
-                .and_then(Value::as_str)
-                .unwrap_or("none");
-            format!("Packet28 handoff diff delta_count={delta_count} top_delta={top_delta}.")
-        }
-        "packet28.handoff_compress" => {
-            let recommendation_count = payload
-                .get("recommendations")
-                .and_then(Value::as_array)
-                .map(Vec::len)
-                .unwrap_or_default();
-            let projected_over_budget = payload
-                .get("projected_over_budget")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            format!("Packet28 handoff compression recommendations={recommendation_count} projected_over_budget={projected_over_budget}.")
-        }
-        "packet28.handoff_lint_dependencies" => {
-            let issue_count = payload
-                .get("issue_count")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            format!("Packet28 handoff dependency lint issue_count={issue_count}.")
-        }
-        "packet28.handoff_lint_paths" => {
-            let issue_count = payload
-                .get("issue_count")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            format!("Packet28 handoff path lint issue_count={issue_count}.")
-        }
-        "packet28.handoff_lint_tests" => {
-            let issue_count = payload
-                .get("issue_count")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            format!("Packet28 handoff test lint issue_count={issue_count}.")
-        }
-        "packet28.handoff_lint_stale_commands" => {
-            let issue_count = payload
-                .get("issue_count")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            format!("Packet28 handoff stale-command lint issue_count={issue_count}.")
-        }
-        "packet28.handoff_lint_environment" => {
-            let issue_count = payload
-                .get("issue_count")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            format!("Packet28 handoff environment lint issue_count={issue_count}.")
-        }
-        "packet28.handoff_lint_all" => {
-            let status = payload
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            let issue_count = payload
-                .get("issue_count")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            format!("Packet28 handoff lint aggregate status={status} issue_count={issue_count}.")
-        }
-        "packet28.handoff_fix_plan" => {
-            let action_count = payload
-                .get("action_count")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            format!("Packet28 handoff fix plan action_count={action_count}.")
-        }
-        "packet28.handoff_repair_verify" => {
-            let verified = payload
-                .get("verified")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            format!("Packet28 handoff repair verified={verified}.")
-        }
-        "packet28.handoff_lint_trends" => {
-            let artifact_count = payload
-                .get("artifact_count")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            format!("Packet28 handoff lint trends artifacts={artifact_count}.")
-        }
-        "packet28.handoff_lint_regressions" => {
-            let regression_count = payload
-                .get("regression_count")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            format!("Packet28 handoff lint regressions count={regression_count}.")
-        }
-        "packet28.prepare_handoff" | "packet28.handoff" => {
-            let ready = payload
-                .get("handoff_ready")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let reason = payload
-                .get("handoff_reason")
-                .and_then(Value::as_str)
-                .unwrap_or("handoff prepared");
-            if ready {
-                format!("Packet28 prepared a handoff: {reason}")
-            } else {
-                format!("Packet28 did not prepare a handoff: {reason}")
-            }
-        }
-        "packet28.validate_plan" => {
-            let valid = payload
-                .get("valid")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let violations = payload
-                .get("violations")
-                .and_then(Value::as_array)
-                .map(Vec::len)
-                .unwrap_or_default();
-            let warnings = payload
-                .get("warnings")
-                .and_then(Value::as_array)
-                .map(Vec::len)
-                .unwrap_or_default();
-            format!("Packet28 plan validation valid={valid} violations={violations} warnings={warnings}.")
-        }
-        "packet28.action_critic" => {
-            let warning_count = payload
-                .get("warnings")
-                .and_then(Value::as_array)
-                .map(Vec::len)
-                .unwrap_or_default();
-            format!("Packet28 action critic returned {warning_count} warning(s).")
-        }
-        "packet28.recommend_next_tool" => {
-            let recommendation_count = payload
-                .get("recommendations")
-                .and_then(Value::as_array)
-                .map(Vec::len)
-                .unwrap_or_default();
-            let token_estimate = payload
-                .get("token_estimate")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            format!(
-                "Packet28 recommended {recommendation_count} next tool(s), estimated {token_estimate} tokens."
-            )
-        }
-        "packet28.validate_tool_outcome" => {
-            let status = payload
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            let valid = payload
-                .get("valid_success")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            format!("Packet28 tool outcome status={status} valid_success={valid}.")
-        }
-        "packet28.patch_risk" => {
-            let risk = payload
-                .get("risk")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            let score = payload
-                .get("score")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            format!("Packet28 patch risk={risk} score={score}.")
-        }
         "packet28.verify_experiments" => {
             let ok = payload.get("ok").and_then(Value::as_bool).unwrap_or(false);
             let experiments = payload
@@ -538,14 +327,6 @@ pub(super) fn summarize_tool_payload(name: &str, payload: &Value) -> String {
             format!("Packet28 distilled graph concepts: {created} created, {refined} refined.")
         }
         "packet28.task_status" => "Packet28 task status.".to_string(),
-        "packet28.agent_status" => {
-            let policy = payload
-                .get("reducer_cache_safety")
-                .and_then(|value| value.get("policy"))
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            format!("Packet28 agent status cache_policy={policy}.")
-        }
         "packet28.capabilities" => "Packet28 broker capabilities.".to_string(),
         _ => "Packet28 response.".to_string(),
     }

@@ -3,7 +3,7 @@ use std::fs;
 use std::net::TcpListener;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
 use serde_json::{json, Value};
 
@@ -16,7 +16,7 @@ use super::McpConfigStatus;
 const PACKET28_CLAUDE_HTTP_HOOK_PATH: &str = "/packet28/claude-hook";
 const PACKET28_CLAUDE_HTTP_TOKEN_HEADER: &str = "X-Packet28-Hook-Token";
 
-pub(super) fn write_claude_hook_config(
+pub(crate) fn write_claude_hook_config(
     path: &Path,
     root: &Path,
     auto_yes: bool,
@@ -34,6 +34,7 @@ pub(super) fn write_claude_hook_config(
     } else {
         BTreeMap::new()
     };
+    let mut hooks = json_object_field_or_default(&config, "hooks", path)?;
     if !auto_yes {
         eprint!(
             "    Write Claude hook config to {}? [Y/n] ",
@@ -54,11 +55,6 @@ pub(super) fn write_claude_hook_config(
         .as_deref()
         .context("Packet28 Claude HTTP hook token is missing after initialization")?;
     let packet28_hooks = build_claude_packet28_hooks(&hook_command, &http_url, http_token);
-    let mut hooks = config
-        .get("hooks")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
     // Claude Code expects hook event names (PreToolUse, Stop, etc.) as
     // direct keys under `hooks`. Merge our entries into each event key
     // rather than nesting under a "packet28" grouping key.
@@ -157,17 +153,18 @@ fn claude_http_hook_entry(matcher: &str, http_url: &str, http_token: &str) -> Va
 
 fn ensure_hook_http_settings_written(
     root: &Path,
-) -> Result<packet28_daemon_core::HookRuntimeConfig> {
-    let path = packet28_daemon_core::hook_runtime_config_path(root);
+) -> Result<packet28_daemon_protocol::hooks::HookRuntimeConfig> {
+    let path = packet28_daemon_protocol::paths::hook_runtime_config_path(root);
     let existed = path.exists();
     let mut config = if existed {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("failed to read '{}'", path.display()))?;
-        serde_json::from_str::<packet28_daemon_core::HookRuntimeConfig>(&content).with_context(
-            || format!("refusing to overwrite invalid JSON in '{}'", path.display()),
-        )?
+        serde_json::from_str::<packet28_daemon_protocol::hooks::HookRuntimeConfig>(&content)
+            .with_context(|| {
+                format!("refusing to overwrite invalid JSON in '{}'", path.display())
+            })?
     } else {
-        packet28_daemon_core::HookRuntimeConfig::default()
+        packet28_daemon_protocol::hooks::HookRuntimeConfig::default()
     };
     let changed = apply_generated_http_hook_settings(&mut config, root);
     if !existed || changed {
@@ -183,7 +180,7 @@ fn ensure_hook_http_settings_written(
 }
 
 fn apply_generated_http_hook_settings(
-    config: &mut packet28_daemon_core::HookRuntimeConfig,
+    config: &mut packet28_daemon_protocol::hooks::HookRuntimeConfig,
     root: &Path,
 ) -> bool {
     let mut changed = false;
@@ -222,7 +219,9 @@ fn generate_http_hook_token(root: &Path) -> String {
     blake3::hash(seed.as_bytes()).to_hex().to_string()
 }
 
-fn claude_http_hook_url(config: &packet28_daemon_core::HookRuntimeConfig) -> Option<String> {
+fn claude_http_hook_url(
+    config: &packet28_daemon_protocol::hooks::HookRuntimeConfig,
+) -> Option<String> {
     config
         .http_hook_port
         .map(|port| format!("http://127.0.0.1:{port}{PACKET28_CLAUDE_HTTP_HOOK_PATH}"))
@@ -253,7 +252,7 @@ fn merge_claude_allowed_http_hook_url(
     true
 }
 
-pub(super) fn write_cursor_hook_config(
+pub(crate) fn write_cursor_hook_config(
     path: &Path,
     root: &Path,
     auto_yes: bool,
@@ -297,11 +296,7 @@ pub(super) fn write_cursor_hook_config(
             return Ok(McpConfigStatus::Declined);
         }
     }
-    let mut hooks = config
-        .get("hooks")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
+    let mut hooks = json_object_field_or_default(&config, "hooks", path)?;
     let packet28_events = packet28_hooks.as_object().cloned().unwrap_or_default();
     let mut already_configured = true;
     for (event_name, entries) in &packet28_events {
@@ -336,7 +331,7 @@ pub(super) fn write_cursor_hook_config(
     Ok(McpConfigStatus::Written)
 }
 
-pub(super) fn write_gemini_hook_config(
+pub(crate) fn write_gemini_hook_config(
     path: &Path,
     root: &Path,
     auto_yes: bool,
@@ -373,11 +368,7 @@ pub(super) fn write_gemini_hook_config(
             return Ok(McpConfigStatus::Declined);
         }
     }
-    let mut hooks = config
-        .get("hooks")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
+    let mut hooks = json_object_field_or_default(&config, "hooks", path)?;
     let existing = hooks
         .get("BeforeTool")
         .and_then(Value::as_array)
@@ -400,7 +391,7 @@ pub(super) fn write_gemini_hook_config(
     Ok(McpConfigStatus::Written)
 }
 
-pub(super) fn write_copilot_hook_config(
+pub(crate) fn write_copilot_hook_config(
     path: &Path,
     root: &Path,
     auto_yes: bool,
@@ -436,11 +427,7 @@ pub(super) fn write_copilot_hook_config(
             return Ok(McpConfigStatus::Declined);
         }
     }
-    let mut hooks = config
-        .get("hooks")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
+    let mut hooks = json_object_field_or_default(&config, "hooks", path)?;
     let existing = hooks
         .get("PreToolUse")
         .and_then(Value::as_array)
@@ -463,7 +450,7 @@ pub(super) fn write_copilot_hook_config(
     Ok(McpConfigStatus::Written)
 }
 
-pub(super) fn write_windsurf_hook_config(
+pub(crate) fn write_windsurf_hook_config(
     path: &Path,
     root: &Path,
     auto_yes: bool,
@@ -507,11 +494,7 @@ pub(super) fn write_windsurf_hook_config(
             return Ok(McpConfigStatus::Declined);
         }
     }
-    let mut hooks = config
-        .get("hooks")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
+    let mut hooks = json_object_field_or_default(&config, "hooks", path)?;
     let packet28_events = packet28_hooks.as_object().cloned().unwrap_or_default();
     let mut already_configured = true;
     for (event_name, entries) in &packet28_events {
@@ -546,23 +529,24 @@ pub(super) fn write_windsurf_hook_config(
     Ok(McpConfigStatus::Written)
 }
 
-pub(super) fn write_hook_runtime_config(
+pub(crate) fn write_hook_runtime_config(
     root: &Path,
     any_hooks_configured: bool,
 ) -> Result<McpConfigStatus> {
     if !any_hooks_configured {
         return Ok(McpConfigStatus::Declined);
     }
-    let path = packet28_daemon_core::hook_runtime_config_path(root);
+    let path = packet28_daemon_protocol::paths::hook_runtime_config_path(root);
     let existed = path.exists();
     let mut config = if existed {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("failed to read '{}'", path.display()))?;
-        serde_json::from_str::<packet28_daemon_core::HookRuntimeConfig>(&content).with_context(
-            || format!("refusing to overwrite invalid JSON in '{}'", path.display()),
-        )?
+        serde_json::from_str::<packet28_daemon_protocol::hooks::HookRuntimeConfig>(&content)
+            .with_context(|| {
+                format!("refusing to overwrite invalid JSON in '{}'", path.display())
+            })?
     } else {
-        packet28_daemon_core::HookRuntimeConfig::default()
+        packet28_daemon_protocol::hooks::HookRuntimeConfig::default()
     };
     let mut changed = apply_generated_http_hook_settings(&mut config, root);
     changed |=
@@ -578,4 +562,19 @@ pub(super) fn write_hook_runtime_config(
         format!("{}\n", serde_json::to_string_pretty(&config)?),
     )?;
     Ok(McpConfigStatus::Written)
+}
+
+fn json_object_field_or_default(
+    config: &BTreeMap<String, Value>,
+    field: &str,
+    path: &Path,
+) -> Result<serde_json::Map<String, Value>> {
+    match config.get(field) {
+        None => Ok(serde_json::Map::new()),
+        Some(Value::Object(value)) => Ok(value.clone()),
+        Some(_) => Err(anyhow!(
+            "refusing to overwrite '{field}' in '{}'; expected a JSON object",
+            path.display()
+        )),
+    }
 }

@@ -16,6 +16,9 @@ use crate::{
 
 pub fn main_entry() {
     let raw_args = std::env::args().collect::<Vec<_>>();
+    if let Some(exit_code) = crate::cmd_macos_swap::internal_launch_gate_exit_code(&raw_args) {
+        std::process::exit(exit_code);
+    }
     let cli = Cli::parse();
     let machine_error = machine_error_context(&cli);
     if let Err(e) = configure_stdout_output(cli.output.as_deref()) {
@@ -232,7 +235,12 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
 pub fn display_error(err: &anyhow::Error) {
     use colored::Colorize;
 
-    if let Some(covy_err) = err.downcast_ref::<suite_packet_core::CovyError>() {
+    if let Some(diffy_err) = err.downcast_ref::<diffy_core::DiffyError>() {
+        eprintln!("{} {diffy_err}", "error:".red().bold());
+        if let Some(hint) = diffy_err.hint() {
+            eprintln!("  {} {hint}", "hint:".cyan().bold());
+        }
+    } else if let Some(covy_err) = err.downcast_ref::<suite_packet_core::CovyError>() {
         eprintln!("{} {covy_err}", "error:".red().bold());
         if let Some(hint) = covy_err.hint() {
             eprintln!("  {} {hint}", "hint:".cyan().bold());
@@ -628,6 +636,8 @@ fn configure_stdout_output(path: Option<&str>) -> anyhow::Result<()> {
         .write(true)
         .open(Path::new(path))?;
 
+    // SAFETY: `file` owns a valid open descriptor for the duration of the
+    // call, and `STDOUT_FILENO` is the process stdout descriptor.
     let ret = unsafe { libc::dup2(file.as_raw_fd(), libc::STDOUT_FILENO) };
     if ret < 0 {
         return Err(std::io::Error::last_os_error().into());

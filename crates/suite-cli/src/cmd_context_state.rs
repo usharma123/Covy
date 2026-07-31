@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
@@ -6,6 +7,8 @@ use serde_json::{json, Value};
 use crate::cmd_context::{
     build_persistent_kernel, StateAppendArgs, StateArgs, StateCommands, StateSnapshotArgs,
 };
+
+const STATE_PERSISTENCE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) fn run_state(args: StateArgs) -> Result<i32> {
     match args.command {
@@ -53,6 +56,14 @@ fn run_state_append(args: StateAppendArgs) -> Result<i32> {
         reducer_input: input_value,
         ..context_kernel_core::KernelRequest::default()
     })?;
+    kernel
+        .shutdown_cache_persistence(STATE_PERSISTENCE_TIMEOUT)
+        .with_context(|| {
+            format!(
+                "failed to durably finish state append under '{}'",
+                args.root
+            )
+        })?;
 
     let output_packet = response
         .output_packets

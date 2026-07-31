@@ -1,25 +1,26 @@
-use serde_json::Value;
 use std::fs;
-use std::io::Write;
 use std::path::Path;
-use std::process::Stdio;
+use std::time::Duration;
+
+use serde_json::Value;
+
+use crate::process_harness::{HarnessLimits, ProcessHarness};
+
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub fn run_claude_hook(root: &Path, payload: &Value) -> (i32, String) {
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"))
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"));
+    command
         .current_dir(root)
-        .args(["hook", "claude", "--root", root.to_str().unwrap()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(serde_json::to_string(payload).unwrap().as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
+        .args(["hook", "claude", "--root", root.to_str().unwrap()]);
+    let input = serde_json::to_vec(payload).unwrap();
+    let output = ProcessHarness::run(
+        &mut command,
+        &input,
+        COMMAND_TIMEOUT,
+        HarnessLimits::default(),
+    )
+    .unwrap_or_else(|error| panic!("Claude hook process failed: {error}"));
     (
         output.status.code().unwrap_or(1),
         String::from_utf8_lossy(&output.stdout).to_string(),
@@ -27,12 +28,7 @@ pub fn run_claude_hook(root: &Path, payload: &Value) -> (i32, String) {
 }
 
 pub fn git(root: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {:?} failed with {status}", args);
+    crate::process_harness::run_git(root, args);
 }
 
 pub fn write_cached_coverage_state(root: &Path) {

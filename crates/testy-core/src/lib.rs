@@ -1,6 +1,11 @@
-pub mod error {
-    pub use suite_packet_core::error::*;
-}
+//! Test selection, test-map construction, timing ingestion, and shard planning.
+//!
+//! Reusable fallible APIs return [`error::TestyError`]. Coverage and diff
+//! integrations cross the typed [`error::AdapterError`] boundary so callers
+//! can inspect original sources while CLI crates remain free to add presentation
+//! context.
+
+pub mod error;
 
 pub mod diagnostics {
     pub use suite_packet_core::diagnostics::*;

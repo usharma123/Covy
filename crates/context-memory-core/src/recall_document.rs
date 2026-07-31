@@ -1,6 +1,8 @@
 use super::*;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, Default, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 #[serde(default)]
 pub(crate) struct RecallDocument {
     pub(crate) cache_key: String,

@@ -18,15 +18,11 @@ on:
       run_id:
         description: "Failed GitHub Actions run id to inspect"
         required: true
-      ref:
-        description: "Git ref to check out"
-        required: false
-        default: main
 
+# Candidate code is inspected with a read-only token. A separate job applies the
+# generated patch without executing it and owns the narrowly scoped write token.
 permissions:
-  actions: read
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: codex-autofix-${{ github.event.workflow_run.id || inputs.run_id }}
@@ -39,68 +35,125 @@ jobs:
       (
         github.event.workflow_run.conclusion == 'failure' &&
         github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.head_branch == github.event.repository.default_branch &&
         github.event.workflow_run.name != 'Codex Autofix'
       )
+    permissions:
+      actions: read
+      contents: read
     runs-on: ubuntu-latest
+    outputs:
+      has_diff: ${{ steps.patch.outputs.has_diff }}
+      run_url: ${{ steps.resolve.outputs.run_url }}
+      target_ref: ${{ steps.resolve.outputs.target_ref }}
     env:
       RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
-      RUN_URL: ${{ github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, inputs.run_id) }}
-      CHECKOUT_REF: ${{ github.event.workflow_run.head_sha || inputs.ref }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      CODEX_AUTOFIX_VERIFY: cargo test --workspace --all-targets
+      TARGET_ROOT: ${{ github.workspace }}/target
+      TRUSTED_AUTOFIX: ${{ github.workspace }}/trusted-control/scripts/ci/codex_autofix.sh
+      TRUSTED_RUN_VALIDATOR: ${{ github.workspace }}/trusted-control/scripts/ci/validate_autofix_run.py
+      CODEX_AUTOFIX_VERIFY: cargo test --locked --workspace --all-targets
     steps:
-      - name: Require OpenAI credentials
-        if: env.OPENAI_API_KEY == ''
-        run: |
-          echo "OPENAI_API_KEY is not configured; skipping Codex autofix."
-          exit 78
-
-      - uses: actions/checkout@v5
+      - name: Check out trusted control plane
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ env.CHECKOUT_REF }}
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted-control
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Validate autofix script
+      - name: Resolve trusted failed run
+        id: resolve
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_METADATA: ${{ runner.temp }}/codex-autofix-run.json
         run: |
-          bash -n scripts/ci/codex_autofix.sh
+          case "$RUN_ID" in
+            ""|*[!0-9]*)
+              echo "run_id must contain only decimal digits" >&2
+              exit 1
+              ;;
+          esac
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" > "$RUN_METADATA"
+          resolution="$(
+            python3 "$TRUSTED_RUN_VALIDATOR" \
+              --metadata "$RUN_METADATA" \
+              --repository "$GITHUB_REPOSITORY" \
+              --default-branch "$DEFAULT_BRANCH"
+          )"
+          target_ref="$(jq -r '.target_ref' <<<"$resolution")"
+          run_url="$(jq -r '.run_url' <<<"$resolution")"
+          git -C trusted-control fetch --no-tags origin "$target_ref"
+          git -C trusted-control merge-base --is-ancestor \
+            "$target_ref" "origin/$DEFAULT_BRANCH"
+          echo "target_ref=$target_ref" >> "$GITHUB_OUTPUT"
+          echo "run_url=$run_url" >> "$GITHUB_OUTPUT"
+
+      - name: Check out repair target without credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ steps.resolve.outputs.target_ref }}
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate trusted autofix driver
+        working-directory: target
+        env:
+          CODEX_AUTOFIX_ROOT: ${{ env.TARGET_ROOT }}
+          CODEX_AUTOFIX_DRY_RUN: "1"
+          CI_FAILURE_LOG: ${{ env.TARGET_ROOT }}/.packet28/ci-autofix/failure.log
+          CI_RUN_URL: ${{ steps.resolve.outputs.run_url }}
+        run: |
+          bash -n "$TRUSTED_AUTOFIX"
           mkdir -p .packet28/ci-autofix
           printf 'simulated failing test log\n' > .packet28/ci-autofix/failure.log
-          CODEX_AUTOFIX_DRY_RUN=1 \
-            CI_FAILURE_LOG="$GITHUB_WORKSPACE/.packet28/ci-autofix/failure.log" \
-            CI_RUN_URL="$RUN_URL" \
-            scripts/ci/codex_autofix.sh
+          bash "$TRUSTED_AUTOFIX"
           test -s .packet28/ci-autofix/prompt.txt
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - uses: actions/setup-node@v6
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
-          node-version: "22"
+          toolchain: 1.93.1
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: target
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22.23.1"
 
       - name: Install Codex CLI
         run: |
-          if ! command -v codex >/dev/null 2>&1; then
-            npm install -g @openai/codex
-          fi
-          codex --version
+          npm install -g @openai/codex@0.145.0
+          test "$(codex --version)" = "codex-cli 0.145.0"
 
       - name: Capture failed run logs
+        working-directory: target
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p .packet28/ci-autofix
-          gh run view "$RUN_ID" --log > .packet28/ci-autofix/failure.log
+          gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log \
+            > .packet28/ci-autofix/failure.log
           test -s .packet28/ci-autofix/failure.log
 
-      - name: Run Codex autofix
+      - name: Run trusted Codex autofix driver
+        working-directory: target
         env:
-          CI_FAILURE_LOG: ${{ github.workspace }}/.packet28/ci-autofix/failure.log
-          CI_RUN_URL: ${{ env.RUN_URL }}
-        run: scripts/ci/codex_autofix.sh
+          CODEX_AUTOFIX_ROOT: ${{ env.TARGET_ROOT }}
+          CI_FAILURE_LOG: ${{ env.TARGET_ROOT }}/.packet28/ci-autofix/failure.log
+          CI_RUN_URL: ${{ steps.resolve.outputs.run_url }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY is not configured; skipping Codex autofix."
+            exit 78
+          fi
+          bash "$TRUSTED_AUTOFIX"
 
-      - name: Verify generated fix
+      - name: Verify generated fix without secrets
+        working-directory: target
         run: |
           if git diff --quiet -- . ':!.packet28'; then
             echo "No autofix diff was produced."
@@ -109,23 +162,78 @@ jobs:
           cargo fmt --check
           bash -lc "$CODEX_AUTOFIX_VERIFY"
 
-      - name: Open autofix pull request
-        if: success()
+      - name: Seal candidate patch
+        id: patch
+        working-directory: target
+        run: |
+          if git diff --quiet -- . ':!.packet28'; then
+            echo "has_diff=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --check -- . ':!.packet28'
+          git diff --binary --full-index -- . ':!.packet28' > .packet28/ci-autofix/diff.patch
+          test -s .packet28/ci-autofix/diff.patch
+          sha256sum .packet28/ci-autofix/diff.patch > .packet28/ci-autofix/diff.patch.sha256
+          echo "has_diff=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload autofix evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: codex-autofix-${{ env.RUN_ID }}-${{ github.run_attempt }}
+          path: target/.packet28/ci-autofix
+          include-hidden-files: true
+
+  publish:
+    if: needs.autofix.outputs.has_diff == 'true'
+    needs: autofix
+    permissions:
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    env:
+      RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+      RUN_URL: ${{ needs.autofix.outputs.run_url }}
+      TARGET_REF: ${{ needs.autofix.outputs.target_ref }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - name: Check out verified repair base
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.TARGET_REF }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download sealed patch
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: codex-autofix-${{ env.RUN_ID }}-${{ github.run_attempt }}
+          path: .packet28/ci-autofix
+
+      - name: Apply patch without executing candidate code
+        run: |
+          sha256sum --check .packet28/ci-autofix/diff.patch.sha256
+          git apply --check --binary .packet28/ci-autofix/diff.patch
+          git apply --index --binary .packet28/ci-autofix/diff.patch
+          git diff --cached --check
+
+      - name: Commit and push autofix branch
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if git diff --quiet -- . ':!.packet28'; then
-            echo "No changes to publish."
-            exit 0
-          fi
-          branch="codex-autofix/run-${RUN_ID}"
+          branch="codex-autofix/run-${RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$branch"
-          git add -A
-          git restore --staged .packet28 || true
-          git commit -m "Codex autofix for CI run ${RUN_ID}"
-          git push --force-with-lease origin "$branch"
+          git -c core.hooksPath=/dev/null commit -m "Codex autofix for CI run ${RUN_ID}"
+          gh auth setup-git
+          git push -u origin "$branch"
+          echo "AUTOFIX_BRANCH=$branch" >> "$GITHUB_ENV"
+
+      - name: Open draft autofix pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           body_file=".packet28/ci-autofix/pr-body.md"
           {
             echo "Automated Codex attempt to fix failing CI run ${RUN_URL}."
@@ -135,21 +243,9 @@ jobs:
               cat .packet28/ci-autofix/final.md
             fi
           } > "$body_file"
-          existing_pr="$(gh pr list --head "$branch" --state open --json url --jq '.[0].url // ""')"
-          if test -n "$existing_pr"; then
-            gh pr edit "$existing_pr" --body-file "$body_file"
-          else
-            gh pr create \
-              --draft \
-              --title "Codex autofix for CI run ${RUN_ID}" \
-              --body-file "$body_file" \
-              --base main \
-              --head "$branch"
-          fi
-
-      - name: Upload autofix artifacts
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: codex-autofix-${{ env.RUN_ID }}
-          path: .packet28/ci-autofix
+          gh pr create \
+            --draft \
+            --title "Codex autofix for CI run ${RUN_ID}" \
+            --body-file "$body_file" \
+            --base "$DEFAULT_BRANCH" \
+            --head "$AUTOFIX_BRANCH"

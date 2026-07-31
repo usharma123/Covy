@@ -60,11 +60,11 @@ pub fn compute_savings_value(saved_tokens: u64, model: &str) -> f64 {
 /// Format a dollar amount.
 pub fn format_usd(value: f64) -> String {
     if value < 0.01 {
-        format!("${:.4}", value)
+        format!("${value:.4}")
     } else if value < 1.0 {
-        format!("${:.3}", value)
+        format!("${value:.3}")
     } else {
-        format!("${:.2}", value)
+        format!("${value:.2}")
     }
 }
 
@@ -74,7 +74,7 @@ pub fn format_cpt(tokens: u64, cost: f64) -> String {
         return "$0.000/1k".to_string();
     }
     let cpt = (cost / tokens as f64) * 1000.0;
-    format!("${:.4}/1k", cpt)
+    format!("${cpt:.4}/1k")
 }
 
 /// Format token count with K/M suffixes.

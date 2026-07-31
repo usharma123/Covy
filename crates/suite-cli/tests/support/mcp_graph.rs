@@ -1,65 +1,69 @@
-use crate::support::mcp::{
-    initialize_mcp_session, packet28_cmd, packet28_process, read_mcp_message_for_id,
-    write_mcp_message,
-};
+use crate::process_harness::{HarnessLimits, McpHarness, ProcessHarness};
 use serde_json::{json, Value};
-use std::io::BufReader;
-use std::process::{Child, ChildStdin, ChildStdout, Stdio};
+use std::time::Duration;
 use tempfile::TempDir;
+
+const MCP_IO_TIMEOUT: Duration = Duration::from_secs(10);
+const MCP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct McpGraphServer {
     root: TempDir,
     home: TempDir,
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    harness: McpHarness,
 }
 
 impl McpGraphServer {
     pub fn start() -> Self {
         let root = TempDir::new().unwrap();
         let home = TempDir::new().unwrap();
-        let mut child = packet28_process()
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"));
+        command
             .current_dir(root.path())
             .env("HOME", home.path())
-            .args(["mcp", "serve", "--root", root.path().to_str().unwrap()])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut stdin = child.stdin.take().unwrap();
-        let mut stdout = BufReader::new(child.stdout.take().unwrap());
-        initialize_mcp_session(&mut stdin, &mut stdout);
+            .args(["mcp", "serve", "--root", root.path().to_str().unwrap()]);
+        let mut harness = McpHarness::spawn(&mut command, HarnessLimits::default())
+            .unwrap_or_else(|error| panic!("failed to start graph MCP server: {error}"));
+        harness
+            .request_with_id(
+                json!(1),
+                "initialize",
+                json!({
+                    "protocolVersion":"2024-11-05",
+                    "capabilities":{},
+                    "clientInfo":{"name":"test","version":"1"}
+                }),
+                MCP_IO_TIMEOUT,
+            )
+            .unwrap_or_else(|error| panic!("failed to initialize graph MCP server: {error}"));
 
         Self {
             root,
             home,
-            child,
-            stdin,
-            stdout,
+            harness,
         }
     }
 
     pub fn call_tool(&mut self, id: u64, name: &str, arguments: Value) -> Value {
-        write_mcp_message(
-            &mut self.stdin,
-            &json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "method": "tools/call",
-                "params": {
+        self.harness
+            .request_with_id(
+                json!(id),
+                "tools/call",
+                json!({
                     "name": name,
                     "arguments": arguments
-                }
-            }),
-        );
-        read_mcp_message_for_id(&mut self.stdout, id)
+                }),
+                MCP_IO_TIMEOUT,
+            )
+            .unwrap_or_else(|error| panic!("MCP tool {name} failed: {error}"))
     }
 
     pub fn stop(mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        packet28_cmd()
+        self.harness
+            .finish(MCP_SHUTDOWN_TIMEOUT)
+            .unwrap_or_else(|error| panic!("failed to stop graph MCP server: {error}"));
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"));
+        command
             .current_dir(self.root.path())
             .env("HOME", self.home.path())
             .args([
@@ -67,8 +71,16 @@ impl McpGraphServer {
                 "stop",
                 "--root",
                 self.root.path().to_str().unwrap(),
-            ])
-            .assert()
-            .success();
+            ]);
+        let output =
+            ProcessHarness::run(&mut command, &[], COMMAND_TIMEOUT, HarnessLimits::default())
+                .unwrap_or_else(|error| panic!("failed to run daemon stop: {error}"));
+        assert!(
+            output.status.success(),
+            "daemon stop failed with {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

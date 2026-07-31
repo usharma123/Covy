@@ -38,7 +38,7 @@ pub(super) fn execute_fff_search_with_session(
                 .call_grep(request);
             match result {
                 Ok(text) => text,
-                Err(error) if attempt == 0 => {
+                Err(_) if attempt == 0 => {
                     guard.fff_client = None;
                     drop(guard);
                     continue;

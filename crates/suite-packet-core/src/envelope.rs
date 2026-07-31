@@ -1,17 +1,25 @@
+//! Canonical packet envelopes and deterministic content hashing.
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Coarse risk classification carried by a packet.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RiskLevel {
+    /// Routine operation with limited impact.
     Low,
+    /// Operation that deserves review but is normally recoverable.
     Medium,
+    /// Operation with substantial impact or recovery cost.
     High,
+    /// Operation that can cause irreversible or system-wide impact.
     Critical,
 }
 
+/// Reference to a file relevant to an envelope payload.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct FileRef {
@@ -22,6 +30,7 @@ pub struct FileRef {
     pub source: Option<String>,
 }
 
+/// Reference to a symbol relevant to an envelope payload.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct SymbolRef {
@@ -36,6 +45,7 @@ pub struct SymbolRef {
     pub source: Option<String>,
 }
 
+/// Estimated resource cost of producing and consuming a packet.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct BudgetCost {
@@ -49,6 +59,7 @@ pub struct BudgetCost {
     pub payload_est_bytes: Option<usize>,
 }
 
+/// Inputs and repository state used to produce a packet.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct Provenance {
@@ -60,6 +71,11 @@ pub struct Provenance {
     pub generated_at_unix: u64,
 }
 
+/// Versioned container for a typed Packet28 payload.
+///
+/// Use [`EnvelopeV1::with_canonical_hash`] after populating an envelope when
+/// deterministic identity is required. Runtime and size estimates do not
+/// participate in that identity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct EnvelopeV1<T> {
@@ -101,6 +117,10 @@ impl<T: Default> Default for EnvelopeV1<T> {
 }
 
 impl<T: Serialize> EnvelopeV1<T> {
+    /// Computes the deterministic hash of this envelope.
+    ///
+    /// The existing hash, volatile generation time, runtime, and estimated
+    /// serialized size are normalized before hashing.
     pub fn canonical_hash(&self) -> String {
         let mut value = serde_json::to_value(self).unwrap_or(Value::Null);
         if let Some(obj) = value.as_object_mut() {
@@ -119,12 +139,17 @@ impl<T: Serialize> EnvelopeV1<T> {
         canonical_hash_json(&value)
     }
 
+    /// Sorts file and symbol references and installs the canonical hash.
     pub fn with_canonical_hash(mut self) -> Self {
         self.sort_refs();
         self.hash = self.canonical_hash();
         self
     }
 
+    /// Installs a canonical hash and converged serialized byte/token estimates.
+    ///
+    /// The estimate uses the crate's conservative four-bytes-per-token model;
+    /// it is not a provider tokenizer result.
     pub fn with_canonical_hash_and_real_budget(mut self) -> Self {
         self.hash = self.canonical_hash();
 
@@ -160,14 +185,21 @@ impl<T: Serialize> EnvelopeV1<T> {
     }
 }
 
+/// Returns the compact JSON size of `value`, or zero if serialization fails.
 pub fn envelope_json_bytes<T: Serialize>(value: &T) -> usize {
     serde_json::to_vec(value).map(|buf| buf.len()).unwrap_or(0)
 }
 
+/// Converts a byte count into the conservative packet token estimate.
 pub fn estimate_tokens_from_bytes(bytes: usize) -> u64 {
     (bytes / 4) as u64
 }
 
+/// Hashes the canonical JSON representation of `value` with BLAKE3.
+///
+/// Object keys are ordered recursively before hashing. A value that cannot be
+/// converted to JSON is represented as JSON `null`, matching the envelope hash
+/// compatibility behavior.
 pub fn canonical_hash_json<T: Serialize>(value: &T) -> String {
     let as_value = serde_json::to_value(value).unwrap_or(Value::Null);
     let canonical = canonicalize_value(as_value);

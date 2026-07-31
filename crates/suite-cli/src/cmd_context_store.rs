@@ -1,16 +1,16 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
-use context_memory_core::{
-    ContextStoreListFilter, ContextStorePaging, ContextStorePruneRequest, PacketCache,
-    PersistConfig,
-};
+use context_memory_core::{ContextStoreListFilter, ContextStorePaging, ContextStorePruneRequest};
 use serde_json::json;
 
 use crate::cmd_context::{
-    emit_json, load_cache, StoreArgs, StoreCommands, StoreGetArgs, StoreListArgs, StorePruneArgs,
-    StoreStatsArgs,
+    build_persistent_kernel, emit_json, load_cache, StoreArgs, StoreCommands, StoreGetArgs,
+    StoreListArgs, StorePruneArgs, StoreStatsArgs,
 };
+
+const STORE_PERSISTENCE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) fn run_store(args: StoreArgs) -> Result<i32> {
     match args.command {
@@ -75,7 +75,7 @@ fn run_store_list_remote(args: StoreListArgs, daemon_root: &Path) -> Result<i32>
     let cwd = crate::cmd_common::caller_cwd()?;
     let response = crate::cmd_daemon::execute_context_store_list(
         daemon_root,
-        packet28_daemon_core::ContextStoreListRequest {
+        packet28_daemon_protocol::context_store::ContextStoreListRequest {
             root: crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd),
             target: args.target.clone(),
             query: args.query.clone(),
@@ -144,7 +144,7 @@ fn run_store_get_remote(args: StoreGetArgs, daemon_root: &Path) -> Result<i32> {
     let cwd = crate::cmd_common::caller_cwd()?;
     let response = crate::cmd_daemon::execute_context_store_get(
         daemon_root,
-        packet28_daemon_core::ContextStoreGetRequest {
+        packet28_daemon_protocol::context_store::ContextStoreGetRequest {
             root: crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd),
             key: args.key.clone(),
         },
@@ -180,15 +180,19 @@ fn run_store_prune(args: StorePruneArgs) -> Result<i32> {
         anyhow::bail!("set --all or --ttl-secs for prune");
     }
 
-    let config = PersistConfig::new(PathBuf::from(&args.root));
-    let mut cache = PacketCache::load_from_disk(&config);
-    let report = cache.prune(ContextStorePruneRequest {
-        all: args.all,
-        ttl_secs: args.ttl_secs,
-    });
-    cache
-        .save_to_disk(&config)
-        .with_context(|| format!("failed to save context store at '{}'", args.root))?;
+    let kernel = build_persistent_kernel(args.root.clone().into());
+    let report = kernel
+        .context_store_prune(
+            ContextStorePruneRequest {
+                all: args.all,
+                ttl_secs: args.ttl_secs,
+            },
+            STORE_PERSISTENCE_TIMEOUT,
+        )
+        .with_context(|| format!("failed to prune context store at '{}'", args.root))?;
+    kernel
+        .shutdown_cache_persistence(STORE_PERSISTENCE_TIMEOUT)
+        .with_context(|| format!("failed to close context store at '{}'", args.root))?;
 
     if args.json {
         emit_json(
@@ -216,7 +220,7 @@ fn run_store_prune_remote(args: StorePruneArgs, daemon_root: &Path) -> Result<i3
 
     let response = crate::cmd_daemon::execute_context_store_prune(
         daemon_root,
-        packet28_daemon_core::ContextStorePruneDaemonRequest {
+        packet28_daemon_protocol::context_store::ContextStorePruneDaemonRequest {
             root: crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd),
             all: args.all,
             ttl_secs: args.ttl_secs,
@@ -278,7 +282,7 @@ fn run_store_stats_remote(args: StoreStatsArgs, daemon_root: &Path) -> Result<i3
     let cwd = crate::cmd_common::caller_cwd()?;
     let response = crate::cmd_daemon::execute_context_store_stats(
         daemon_root,
-        packet28_daemon_core::ContextStoreStatsRequest {
+        packet28_daemon_protocol::context_store::ContextStoreStatsRequest {
             root: crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd),
         },
     )?;
@@ -309,4 +313,52 @@ fn run_store_stats_remote(args: StoreStatsArgs, daemon_root: &Path) -> Result<i3
     );
 
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use context_memory_core::{CachePacket, NoopDeltaReuseHooks, PacketCache, PersistConfig};
+    use serde_json::{json, Value};
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn standalone_prune_updates_the_shared_live_root() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let config = PersistConfig::new(root.clone());
+        let mut cache = PacketCache::new();
+        let mut hooks = NoopDeltaReuseHooks;
+        let lookup = cache.lookup_with_hooks("test.reducer", &json!({"id": 1}), &mut hooks);
+        cache.put_with_hooks(
+            "test.reducer",
+            &lookup,
+            vec![CachePacket {
+                packet_id: Some("packet-1".to_string()),
+                body: json!({"payload": "live"}),
+                ..CachePacket::default()
+            }],
+            Value::Null,
+            &mut hooks,
+        );
+        cache.save_to_disk(&config).unwrap();
+        let live_kernel = build_persistent_kernel(root.clone());
+        assert_eq!(live_kernel.context_store_stats().unwrap().entries, 1);
+
+        run_store_prune(StorePruneArgs {
+            root: root.to_string_lossy().into_owned(),
+            all: true,
+            ttl_secs: None,
+            json: false,
+            pretty: false,
+        })
+        .unwrap();
+
+        assert_eq!(live_kernel.context_store_stats().unwrap().entries, 0);
+        live_kernel
+            .shutdown_cache_persistence(STORE_PERSISTENCE_TIMEOUT)
+            .unwrap();
+        assert_eq!(PacketCache::load_from_disk(&config).len(), 0);
+    }
 }

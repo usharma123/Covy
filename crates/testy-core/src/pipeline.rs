@@ -1,11 +1,13 @@
-use anyhow::{Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use suite_packet_core::gate::{ImpactPlan, ImpactResult};
 
-pub type ImpactError = anyhow::Error;
+use crate::error::{AdapterResult, Result, TestyError};
+
+/// Error returned by impact orchestration.
+pub type ImpactError = TestyError;
 
 #[derive(Debug, Clone)]
 pub struct ImpactRequest {
@@ -82,10 +84,10 @@ pub struct ImpactResponse {
 
 #[derive(Clone, Copy)]
 pub struct ImpactAdapters {
-    pub ingest_coverage_auto: fn(&Path) -> Result<crate::model::CoverageData>,
+    pub ingest_coverage_auto: fn(&Path) -> AdapterResult<crate::model::CoverageData>,
     pub ingest_coverage_with_format:
-        fn(&Path, crate::model::CoverageFormat) -> Result<crate::model::CoverageData>,
-    pub git_diff: fn(&str, &str) -> Result<Vec<crate::model::FileDiff>>,
+        fn(&Path, crate::model::CoverageFormat) -> AdapterResult<crate::model::CoverageData>,
+    pub git_diff: fn(&str, &str) -> AdapterResult<Vec<crate::model::FileDiff>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -133,10 +135,13 @@ impl ManifestRecord {
     }
 }
 
-pub fn run_impact(
-    req: ImpactRequest,
-    adapters: &ImpactAdapters,
-) -> Result<ImpactResponse, ImpactError> {
+/// Run record, plan, or legacy impact selection through injected adapters.
+///
+/// # Errors
+///
+/// Returns [`ImpactError`] for invalid requests, state and manifest failures,
+/// or typed coverage/diff adapter failures.
+pub fn run_impact(req: ImpactRequest, adapters: &ImpactAdapters) -> Result<ImpactResponse> {
     match req.mode {
         ImpactMode::Record(record) => run_record(record, adapters),
         ImpactMode::Plan(plan) => run_plan(plan, adapters),
@@ -161,9 +166,9 @@ fn run_record(args: ImpactRecordRequest, adapters: &ImpactAdapters) -> Result<Im
     }
 
     if by_test.is_empty() {
-        anyhow::bail!(
-            "No per-test coverage inputs found. Provide at least one of --per-test-*-dir or --test-report."
-        );
+        return Err(TestyError::invalid(
+            "No per-test coverage inputs found. Provide at least one of --per-test-*-dir or --test-report.",
+        ));
     }
 
     let (index, mut summary) = build_testmap_index(by_test, &args.base_ref, adapters)?;
@@ -171,18 +176,32 @@ fn run_record(args: ImpactRecordRequest, adapters: &ImpactAdapters) -> Result<Im
 
     let output = Path::new(&args.output);
     if let Some(parent) = output.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).map_err(|source| {
+            TestyError::io("Failed to create testmap parent directory", parent, source)
+        })?;
     }
-    let bytes = crate::cache::serialize_testmap(&index)?;
-    std::fs::write(output, bytes)?;
+    let bytes = crate::cache::serialize_testmap(&index)
+        .map_err(|source| TestyError::state("Failed to encode testmap at", output, source))?;
+    std::fs::write(output, bytes)
+        .map_err(|source| TestyError::io("Failed to write testmap at", output, source))?;
 
     if let Some(summary_path) = args.summary_json.as_deref() {
         let summary_path = Path::new(summary_path);
         if let Some(parent) = summary_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).map_err(|source| {
+                TestyError::io(
+                    "Failed to create impact summary parent directory",
+                    parent,
+                    source,
+                )
+            })?;
         }
-        let json = serde_json::to_string_pretty(&summary)?;
-        std::fs::write(summary_path, json)?;
+        let json = serde_json::to_string_pretty(&summary).map_err(|source| {
+            TestyError::json("Failed to encode impact record summary", source, None)
+        })?;
+        std::fs::write(summary_path, json).map_err(|source| {
+            TestyError::io("Failed to write impact summary at", summary_path, source)
+        })?;
     }
 
     Ok(ImpactResponse {
@@ -200,17 +219,27 @@ fn run_record(args: ImpactRecordRequest, adapters: &ImpactAdapters) -> Result<Im
 fn run_plan(args: ImpactPlanRequest, adapters: &ImpactAdapters) -> Result<ImpactResponse> {
     let target_coverage = args.target_coverage.clamp(0.0, 1.0);
 
-    let bytes = std::fs::read(&args.testmap)
-        .with_context(|| format!("Failed to read testmap at {}", args.testmap))?;
-    let map = crate::cache::deserialize_testmap(&bytes)?;
-    if map.coverage.is_empty() || map.file_index.is_empty() || map.tests.is_empty() {
-        anyhow::bail!(
-            "Testmap '{}' does not include line-level v2 coverage data. Rebuild with `covy impact record`.",
+    let testmap_path = Path::new(&args.testmap);
+    let bytes = std::fs::read(testmap_path)
+        .map_err(|source| TestyError::io("Failed to read testmap at", testmap_path, source))?;
+    let map = crate::cache::deserialize_testmap(&bytes)
+        .map_err(|source| TestyError::state("Failed to decode testmap at", testmap_path, source))?;
+    if !map.has_line_coverage() {
+        return Err(TestyError::invalid(format!(
+            "Testmap '{}' does not include line-level coverage data. Rebuild with `covy impact record`.",
             args.testmap
-        );
+        )));
     }
 
-    let diffs = (adapters.git_diff)(&args.base_ref, &args.head_ref)?;
+    let diffs = (adapters.git_diff)(&args.base_ref, &args.head_ref).map_err(|source| {
+        TestyError::adapter(
+            format!(
+                "Failed to collect git diff from '{}' to '{}'",
+                args.base_ref, args.head_ref
+            ),
+            source,
+        )
+    })?;
     let plan = crate::impact::plan_impacted_tests(&map, &diffs, args.max_tests, target_coverage);
 
     Ok(ImpactResponse {
@@ -234,16 +263,22 @@ fn run_legacy_select(
     args: ImpactLegacyRequest,
     adapters: &ImpactAdapters,
 ) -> Result<ImpactResponse> {
-    let bytes = std::fs::read(Path::new(&args.testmap)).map_err(|e| {
-        anyhow::anyhow!(
-            "Failed to read testmap at {}: {e}",
-            Path::new(&args.testmap).display()
-        )
-    })?;
-    let map = crate::cache::deserialize_testmap(&bytes)?;
+    let testmap_path = Path::new(&args.testmap);
+    let bytes = std::fs::read(testmap_path)
+        .map_err(|source| TestyError::io("Failed to read testmap at", testmap_path, source))?;
+    let map = crate::cache::deserialize_testmap(&bytes)
+        .map_err(|source| TestyError::state("Failed to decode testmap at", testmap_path, source))?;
     let known_tests = map.test_to_files.len();
 
-    let diffs = (adapters.git_diff)(&args.base_ref, &args.head_ref)?;
+    let diffs = (adapters.git_diff)(&args.base_ref, &args.head_ref).map_err(|source| {
+        TestyError::adapter(
+            format!(
+                "Failed to collect git diff from '{}' to '{}'",
+                args.base_ref, args.head_ref
+            ),
+            source,
+        )
+    })?;
     let mut result = crate::impact::select_impacted_tests(&map, &diffs);
     let stale = is_stale(map.metadata.generated_at, args.fresh_hours);
     apply_policy(
@@ -287,10 +322,21 @@ fn collect_inputs_from_dir(
 ) -> Result<()> {
     let dir_path = Path::new(dir);
     if !dir_path.exists() {
-        anyhow::bail!("Coverage directory does not exist: {}", dir_path.display());
+        return Err(TestyError::invalid(format!(
+            "Coverage directory does not exist: {}",
+            dir_path.display()
+        )));
     }
-    for entry in std::fs::read_dir(dir_path)? {
-        let entry = entry?;
+    let entries = std::fs::read_dir(dir_path)
+        .map_err(|source| TestyError::io("Failed to read coverage directory", dir_path, source))?;
+    for entry in entries {
+        let entry = entry.map_err(|source| {
+            TestyError::io(
+                "Failed to read coverage directory entry in",
+                dir_path,
+                source,
+            )
+        })?;
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -300,7 +346,9 @@ fn collect_inputs_from_dir(
             .and_then(|s| s.to_str())
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("Cannot infer test id from {}", path.display()))?
+            .ok_or_else(|| {
+                TestyError::invalid(format!("Cannot infer test id from {}", path.display()))
+            })?
             .to_string();
 
         let language = infer_language_from_test_id(&test_id);
@@ -323,30 +371,43 @@ fn collect_inputs_from_manifest(
     path: &str,
     by_test: &mut BTreeMap<String, TestCoverageInput>,
 ) -> Result<()> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read test report manifest {}", path))?;
+    let content = std::fs::read_to_string(path).map_err(|source| {
+        TestyError::io(
+            "Failed to read test report manifest",
+            Path::new(path),
+            source,
+        )
+    })?;
     for (idx, line) in content.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let rec: ManifestRecord = serde_json::from_str(line).map_err(|e| {
-            anyhow::anyhow!(
-                "Invalid JSON in test report manifest {} at line {}: {e}\n\nExpected JSONL shape (one per line):\n  {{\"test_id\": \"com.foo.BarTest\", \"coverage_report\": \"path/to/jacoco.xml\"}}",
-                path,
-                idx + 1
-            )
+        let rec: ManifestRecord = serde_json::from_str(line).map_err(|source| {
+            TestyError::Json {
+                context: format!(
+                    "Invalid JSON in test report manifest {} at line {}",
+                    path,
+                    idx + 1
+                ),
+                source,
+                example: "\n\nExpected JSONL shape (one per line):\n  {\"test_id\": \"com.foo.BarTest\", \"coverage_report\": \"path/to/jacoco.xml\"}".to_string(),
+            }
         })?;
         if rec.test_id.trim().is_empty() {
-            anyhow::bail!("Manifest {} line {} has empty test_id", path, idx + 1);
+            return Err(TestyError::invalid(format!(
+                "Manifest {} line {} has empty test_id",
+                path,
+                idx + 1
+            )));
         }
         if rec.coverage_paths().is_empty() {
-            anyhow::bail!(
+            return Err(TestyError::invalid(format!(
                 "Manifest {} line {} has no coverage_report(s) for test '{}'",
                 path,
                 idx + 1,
                 rec.test_id
-            );
+            )));
         }
 
         let input = by_test
@@ -369,6 +430,10 @@ fn collect_inputs_from_manifest(
     Ok(())
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "file_index is built from the same canonical paths immediately before binary search"
+)]
 fn build_testmap_index(
     by_test: BTreeMap<String, TestCoverageInput>,
     base_ref: &str,
@@ -387,7 +452,8 @@ fn build_testmap_index(
     index.metadata.granularity = "line".to_string();
     index.metadata.commit_sha = resolve_commit_sha(base_ref);
 
-    let mut per_test_lines: BTreeMap<String, BTreeMap<String, Vec<u32>>> = BTreeMap::new();
+    let mut per_test_lines: BTreeMap<String, BTreeMap<String, roaring::RoaringBitmap>> =
+        BTreeMap::new();
     let mut file_index_set: BTreeSet<String> = BTreeSet::new();
 
     for (test_id, input) in by_test {
@@ -416,23 +482,25 @@ fn build_testmap_index(
                     crate::model::CoverageFormat::Cobertura,
                 ),
             }
-            .with_context(|| {
-                format!(
-                    "Failed to parse coverage report '{}' for test '{}'",
-                    report.path.display(),
-                    canonical_test_id
+            .map_err(|source| {
+                TestyError::adapter(
+                    format!(
+                        "Failed to parse coverage report '{}' for test '{}'",
+                        report.path.display(),
+                        canonical_test_id
+                    ),
+                    source,
                 )
             })?;
             combined.merge(&data);
         }
 
         suite_foundation_core::pathmap::auto_normalize_paths(&mut combined, None);
-        let mut line_map: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+        let mut line_map = BTreeMap::new();
 
-        for (file, fc) in &combined.files {
+        for (file, fc) in combined.files {
             file_index_set.insert(file.clone());
-            let lines: Vec<u32> = fc.lines_covered.iter().collect();
-            line_map.insert(file.clone(), lines);
+            line_map.insert(file.clone(), fc.lines_covered);
             index
                 .test_to_files
                 .entry(canonical_test_id.clone())
@@ -458,24 +526,27 @@ fn build_testmap_index(
     index.tests = per_test_lines.keys().cloned().collect();
     index.file_index = file_index_set.into_iter().collect();
 
-    let mut coverage = Vec::with_capacity(index.tests.len());
     let mut non_empty_cells = 0usize;
-    for test_id in &index.tests {
-        let mut row = Vec::with_capacity(index.file_index.len());
-        let map = per_test_lines.get(test_id);
-        for file in &index.file_index {
-            let lines = map
-                .and_then(|m| m.get(file))
-                .cloned()
-                .unwrap_or_else(Vec::new);
-            if !lines.is_empty() {
-                non_empty_cells += 1;
-            }
-            row.push(lines);
-        }
-        coverage.push(row);
-    }
-    index.coverage = coverage;
+    index.sparse_coverage = per_test_lines
+        .into_values()
+        .map(|line_map| {
+            let files = line_map
+                .into_iter()
+                .filter_map(|(file, lines)| {
+                    if lines.is_empty() {
+                        return None;
+                    }
+                    non_empty_cells += 1;
+                    let file_idx = index
+                        .file_index
+                        .binary_search(&file)
+                        .expect("coverage path was collected into the canonical file index");
+                    Some(crate::testmap::SparseFileCoverage { file_idx, lines })
+                })
+                .collect();
+            crate::testmap::SparseTestCoverageRow { files }
+        })
+        .collect();
 
     let summary = ImpactRecordSummary {
         tests_total: index.tests.len(),
@@ -580,10 +651,10 @@ fn apply_policy(
     if options.fallback_mode.eq_ignore_ascii_case("fail-closed")
         && !result.missing_mappings.is_empty()
     {
-        anyhow::bail!(
+        return Err(TestyError::invalid(format!(
             "Impact mapping missing for {} changed file(s) in fail-closed mode",
             result.missing_mappings.len()
-        );
+        )));
     }
 
     Ok(())
@@ -643,7 +714,7 @@ mod tests {
         workspace.join("tests").join("fixtures").join(rel)
     }
 
-    fn fake_coverage_for_path(path: &Path) -> Result<crate::model::CoverageData> {
+    fn fake_coverage_for_path(path: &Path) -> AdapterResult<crate::model::CoverageData> {
         let mut data = crate::model::CoverageData::new();
         let mut fc = crate::model::FileCoverage::new();
         fc.lines_instrumented.insert(1);
@@ -661,11 +732,11 @@ mod tests {
     fn fake_coverage_with_format(
         path: &Path,
         _format: crate::model::CoverageFormat,
-    ) -> Result<crate::model::CoverageData> {
+    ) -> AdapterResult<crate::model::CoverageData> {
         fake_coverage_for_path(path)
     }
 
-    fn empty_git_diff(_base: &str, _head: &str) -> Result<Vec<crate::model::FileDiff>> {
+    fn empty_git_diff(_base: &str, _head: &str) -> AdapterResult<Vec<crate::model::FileDiff>> {
         Ok(Vec::new())
     }
 
@@ -706,7 +777,7 @@ mod tests {
     }
 
     #[test]
-    fn test_run_record_builds_v2_testmap_and_summary() {
+    fn test_run_record_builds_sparse_testmap_and_summary() {
         let dir = tempfile::TempDir::new().unwrap();
         let per_test_dir = dir.path().join("per-test-lcov");
         std::fs::create_dir_all(&per_test_dir).unwrap();
@@ -743,7 +814,15 @@ mod tests {
         let bytes = std::fs::read(&testmap).unwrap();
         let map = crate::cache::deserialize_testmap(&bytes).unwrap();
         assert_eq!(map.tests.len(), 1);
-        assert_eq!(map.coverage.len(), 1);
+        assert_eq!(map.tests.len(), map.sparse_coverage.len());
+        assert_eq!(
+            map.sparse_coverage
+                .iter()
+                .map(|row| row.files.len())
+                .sum::<usize>(),
+            summary.non_empty_cells
+        );
+        assert!(map.coverage.is_empty());
         assert!(!map.file_index.is_empty());
         assert!(map.metadata.generated_at > 0);
     }
@@ -806,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn test_run_plan_rejects_non_v2_testmap() {
+    fn test_run_plan_rejects_testmap_without_line_coverage() {
         let dir = tempfile::TempDir::new().unwrap();
         let testmap = dir.path().join("testmap.bin");
 
@@ -829,7 +908,7 @@ mod tests {
 
         assert!(err
             .to_string()
-            .contains("does not include line-level v2 coverage data"));
+            .contains("does not include line-level coverage data"));
     }
 
     #[test]

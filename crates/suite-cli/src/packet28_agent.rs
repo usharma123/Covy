@@ -4,10 +4,16 @@ use std::process::{Command, Stdio};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{CommandFactory, Parser};
-use packet28_daemon_core::{
-    task_brief_json_path, task_brief_markdown_path, task_state_json_path, BrokerGetContextResponse,
-    BrokerPrepareHandoffRequest, BrokerResponseMode, BrokerSupersessionMode,
-    TaskAwaitHandoffRequest,
+use packet28_daemon_core::storage::now_unix;
+use packet28_daemon_core::task_store_lease::acquire_task_store_writer_lease;
+use packet28_daemon_protocol::{
+    broker::{
+        BrokerGetContextResponse, BrokerPrepareHandoffRequest, BrokerResponseMode,
+        BrokerSupersessionMode,
+    },
+    hooks::ActiveTaskRecord,
+    paths::{task_brief_json_path, task_brief_markdown_path, task_state_json_path, TaskStorageId},
+    task::TaskAwaitHandoffRequest,
 };
 
 const BOOTSTRAP_MODE_FRESH: &str = "fresh";
@@ -76,23 +82,25 @@ pub fn run(cli: Packet28AgentCli) -> Result<i32> {
     let bootstrap_parent = bootstrap_path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("invalid bootstrap output path"))?;
+
+    let bootstrap = prepare_bootstrap(&root, &cli, &bootstrap_path, &handoff_path)?;
+    let task_storage_id = TaskStorageId::try_from(bootstrap.task_id.as_str())?;
+    let writer_lease = acquire_task_store_writer_lease(&root)?;
     fs::create_dir_all(bootstrap_parent).with_context(|| {
         format!(
             "failed to create Packet28 agent directory '{}'",
             bootstrap_parent.display()
         )
     })?;
-
-    let bootstrap = prepare_bootstrap(&root, &cli, &bootstrap_path, &handoff_path)?;
     fs::write(&bootstrap_path, serde_json::to_vec(&bootstrap.response)?).with_context(|| {
         format!(
             "failed to persist bootstrap payload to '{}'",
             bootstrap_path.display()
         )
     })?;
-    let brief_json_path = task_brief_json_path(&root, &bootstrap.task_id);
-    let brief_md_path = task_brief_markdown_path(&root, &bootstrap.task_id);
-    let state_json_path = task_state_json_path(&root, &bootstrap.task_id);
+    let brief_json_path = task_brief_json_path(&root, &task_storage_id);
+    let brief_md_path = task_brief_markdown_path(&root, &task_storage_id);
+    let state_json_path = task_state_json_path(&root, &task_storage_id);
     if let Some(parent) = brief_md_path.parent() {
         fs::create_dir_all(parent).with_context(|| {
             format!(
@@ -135,6 +143,7 @@ pub fn run(cli: Packet28AgentCli) -> Result<i32> {
             state_json_path.display()
         )
     })?;
+    drop(writer_lease);
     let proxy_config = std::env::var_os("PACKET28_MCP_UPSTREAM_CONFIG")
         .map(PathBuf::from)
         .or_else(|| {
@@ -250,14 +259,18 @@ fn prepare_bootstrap(
                 "packet28-agent requires a checkpointed task via --task-id or a derivable --task"
             )
         })?;
-    crate::task_runtime::store_active_task(
-        root,
-        &packet28_daemon_core::ActiveTaskRecord {
-            task_id: task_id.clone(),
-            session_id: None,
-            updated_at_unix: packet28_daemon_core::now_unix(),
-        },
-    )?;
+    TaskStorageId::try_from(task_id.as_str())?;
+    {
+        let _writer_lease = acquire_task_store_writer_lease(root)?;
+        crate::task_runtime::store_active_task(
+            root,
+            &ActiveTaskRecord {
+                task_id: task_id.clone(),
+                session_id: None,
+                updated_at_unix: now_unix(),
+            },
+        )?;
+    }
     if cli.wait_for_handoff {
         let task_id = maybe_wait_for_handoff(root, cli, task_id)?;
         return prepare_handoff_bootstrap(
@@ -273,7 +286,7 @@ fn prepare_bootstrap(
 
 fn prepare_fresh_bootstrap(task_id: String, bootstrap_path: &std::path::Path) -> BootstrapContext {
     let response = BrokerGetContextResponse {
-        context_version: format!("fresh-{}", packet28_daemon_core::now_unix()),
+        context_version: format!("fresh-{}", now_unix()),
         response_mode: BrokerResponseMode::Full,
         artifact_id: None,
         latest_intention: None,
@@ -335,7 +348,7 @@ fn prepare_handoff_bootstrap(
         BrokerPrepareHandoffRequest {
             task_id: task_id.clone(),
             query,
-            response_mode: Some(packet28_daemon_core::BrokerResponseMode::Full),
+            response_mode: Some(BrokerResponseMode::Full),
             include_debug_memory: false,
         },
     )?;
@@ -347,10 +360,7 @@ fn prepare_handoff_bootstrap(
         ));
     }
     let response = handoff.context.ok_or_else(|| {
-        anyhow!(
-            "Packet28 returned a ready handoff for task '{}' without context payload",
-            task_id
-        )
+        anyhow!("Packet28 returned a ready handoff for task '{task_id}' without context payload")
     })?;
     fs::write(handoff_path, serde_json::to_vec(&response)?).with_context(|| {
         format!(

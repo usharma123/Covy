@@ -1,6 +1,44 @@
 {
   "experiments": [
     {
+      "id": "instruction-prefix-20260728",
+      "workflow": "Controlled passthrough, stable-prefix, and adaptive instruction rendering across cache lifecycle transitions",
+      "commands": [
+        "python3 docs/experiments/prompt-cache-context/run_instruction_prefix_experiment.py"
+      ],
+      "artifacts": [
+        "docs/experiments/prompt-cache-context/20260728/summary.md",
+        "docs/experiments/prompt-cache-context/20260728/metadata.json",
+        "docs/experiments/prompt-cache-context/20260728/local-results.json",
+        "docs/experiments/prompt-cache-context/20260728/records.jsonl",
+        "docs/experiments/prompt-cache-context/instruction_prefix_manifest.json"
+      ],
+      "metrics": [
+        {
+          "name": "stable_unique_rendered_prefix_hashes",
+          "value": 1,
+          "max": 1,
+          "evidence": [
+            "| `stable` | 18 | 18 | 12 | 1 |"
+          ]
+        },
+        {
+          "name": "local_invariant_failures",
+          "value": 0,
+          "max": 0,
+          "evidence": [
+            "- Result: `PASS`"
+          ]
+        }
+      ],
+      "runtime_versions": [
+        {
+          "name": "packet28",
+          "version": "0.2.63"
+        }
+      ]
+    },
+    {
       "id": "agentic-tokenomics-20260518",
       "workflow": "Packet28 versus normal tools on a generated agentic Rust bug-fix task",
       "commands": [

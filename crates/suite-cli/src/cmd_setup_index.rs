@@ -3,9 +3,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use packet28_daemon_core::{
-    DaemonIndexStatusRequest, DaemonIndexStatusResponse, DaemonRequest, DaemonResponse,
+use packet28_daemon_protocol::index::{
+    DaemonIndexState, DaemonIndexStatusRequest, DaemonIndexStatusResponse,
 };
+use packet28_daemon_protocol::message::{DaemonRequest, DaemonResponse};
 
 use crate::cmd_setup_render::{format_setup_badge, SetupBadgeStyle};
 
@@ -189,7 +190,7 @@ pub(crate) fn classify_setup_index_status(
 
 fn setup_index_ready(root: &Path, response: &DaemonIndexStatusResponse) -> bool {
     response.ready
-        && response.manifest.status == "ready"
+        && response.manifest.status == DaemonIndexState::Ready
         && response.manifest.regex_status.as_deref() == Some("ready")
         && response.manifest.regex_generation.is_some()
         && response
@@ -206,7 +207,7 @@ fn setup_index_failure_reason(
     timed_out: bool,
 ) -> Option<String> {
     let manifest = &response.manifest;
-    if manifest.status == "corrupt" {
+    if manifest.status == DaemonIndexState::Corrupt {
         return Some(
             manifest
                 .last_error
@@ -223,7 +224,9 @@ fn setup_index_failure_reason(
                 .unwrap_or_else(|| "regex trigram index is corrupt".to_string()),
         );
     }
-    if manifest.status == "ready" && manifest.regex_status.as_deref() != Some("ready") {
+    if manifest.status == DaemonIndexState::Ready
+        && manifest.regex_status.as_deref() != Some("ready")
+    {
         return Some(
             manifest
                 .regex_stale_reason
@@ -235,7 +238,8 @@ fn setup_index_failure_reason(
     if timed_out && !regex_index_artifacts_present(root) {
         return Some("regex trigram index artifacts are missing".to_string());
     }
-    if timed_out && manifest.status == "missing" && manifest.regex_status.is_none() {
+    if timed_out && manifest.status == DaemonIndexState::Missing && manifest.regex_status.is_none()
+    {
         return Some("setup did not create the repo or regex search index".to_string());
     }
     None

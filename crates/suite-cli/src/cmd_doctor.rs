@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
-use packet28_daemon_core::{DaemonIndexStatusRequest, DaemonRequest, DaemonResponse};
+use packet28_daemon_protocol::index::{DaemonIndexState, DaemonIndexStatusRequest};
+use packet28_daemon_protocol::message::{DaemonRequest, DaemonResponse};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -830,10 +831,14 @@ fn build_hermes_report(root: &Path) -> DoctorReport {
 
 fn check_hermes_plugin() -> DoctorCheck {
     let home = dirs_home();
-    let plugin_dir = hermes::plugin_dir(&home);
+    check_hermes_plugin_at(&home)
+}
+
+fn check_hermes_plugin_at(home: &Path) -> DoctorCheck {
+    let plugin_dir = hermes::plugin_dir(home);
     let init_path = plugin_dir.join("__init__.py");
     let manifest_path = plugin_dir.join("plugin.yaml");
-    let config_path = hermes::config_path(&home);
+    let config_path = hermes::config_path(home);
     let result = (|| -> Result<String> {
         let init = fs::read_to_string(&init_path)
             .with_context(|| format!("failed to read '{}'", init_path.display()))?;
@@ -844,17 +849,8 @@ fn check_hermes_plugin() -> DoctorCheck {
         if !init.contains("Packet28 rewrite") || !manifest.contains("packet28-rewrite") {
             return Err(anyhow!("Packet28 Hermes plugin files are not configured"));
         }
-        let config_value = serde_yaml::from_str::<serde_yaml::Value>(&config)
+        let enabled = crate::cmd_setup::setup_plugins::hermes_config_enables_packet28(&config)
             .with_context(|| format!("invalid YAML in '{}'", config_path.display()))?;
-        let enabled = config_value
-            .get("plugins")
-            .and_then(|plugins| plugins.get("enabled"))
-            .and_then(serde_yaml::Value::as_sequence)
-            .is_some_and(|items| {
-                items
-                    .iter()
-                    .any(|item| item.as_str() == Some("packet28-rewrite"))
-            });
         if !enabled {
             return Err(anyhow!("Hermes config does not enable packet28-rewrite"));
         }
@@ -935,49 +931,35 @@ fn build_windsurf_report(root: &Path) -> DoctorReport {
 }
 
 fn check_daemon(root: &Path) -> DoctorCheck {
-    match crate::cmd_daemon::ensure_daemon(root) {
-        Ok(_) => match crate::cmd_daemon::send_request(root, &DaemonRequest::Status) {
-            Ok(DaemonResponse::Status { status }) => {
-                let cli_version = env!("PACKET28_VERSION");
-                let daemon_version = status.version.trim();
-                let version_ok = daemon_version == cli_version;
-                DoctorCheck {
-                    name: "daemon",
-                    ok: version_ok,
-                    required: true,
-                    detail: if version_ok {
-                        format!(
-                            "daemon ready pid={} version={} socket={}",
-                            status.pid, daemon_version, status.socket_path
-                        )
-                    } else {
-                        format!(
-                            "daemon version skew: cli={} daemon={} pid={} socket={}; restart the daemon",
-                            cli_version,
-                            if daemon_version.is_empty() {
-                                "<unknown>"
-                            } else {
-                                daemon_version
-                            },
-                            status.pid,
-                            status.socket_path
-                        )
-                    },
-                }
+    match crate::cmd_daemon::daemon_status_v1(root) {
+        Ok(status) => {
+            let cli_version = env!("PACKET28_VERSION");
+            let daemon_version = status.version.trim();
+            let version_ok = daemon_version == cli_version;
+            DoctorCheck {
+                name: "daemon",
+                ok: version_ok,
+                required: true,
+                detail: if version_ok {
+                    format!(
+                        "daemon ready pid={} version={} socket={}",
+                        status.pid, daemon_version, status.socket_path
+                    )
+                } else {
+                    format!(
+                        "daemon version skew: cli={} daemon={} pid={} socket={}; restart the daemon",
+                        cli_version,
+                        if daemon_version.is_empty() {
+                            "<unknown>"
+                        } else {
+                            daemon_version
+                        },
+                        status.pid,
+                        status.socket_path
+                    )
+                },
             }
-            Ok(other) => DoctorCheck {
-                name: "daemon",
-                ok: false,
-                required: true,
-                detail: format!("unexpected daemon status response: {other:?}"),
-            },
-            Err(err) => DoctorCheck {
-                name: "daemon",
-                ok: false,
-                required: true,
-                detail: err.to_string(),
-            },
-        },
+        }
         Err(err) => DoctorCheck {
             name: "daemon",
             ok: false,
@@ -999,7 +981,7 @@ fn check_index(root: &Path) -> DoctorCheck {
             },
         ) {
             Ok(DaemonResponse::DaemonIndexStatus { response }) => {
-                let ok = response.ready && response.manifest.status == "ready";
+                let ok = response.ready && response.manifest.status == DaemonIndexState::Ready;
                 if ok || std::time::Instant::now() >= deadline {
                     return DoctorCheck {
                         name: "index",
@@ -1264,4 +1246,54 @@ fn print_human_report(report: &DoctorReport) {
         println!("  {}", check.detail);
     }
     println!("overall: {}", if report.ok { "ok" } else { "fail" });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tempfile::tempdir;
+
+    fn write_hermes_fixture(home: &Path, config: &str) {
+        let plugin_dir = hermes::plugin_dir(home);
+        fs::create_dir_all(&plugin_dir).unwrap();
+        fs::write(plugin_dir.join("__init__.py"), "# Packet28 rewrite\n").unwrap();
+        fs::write(plugin_dir.join("plugin.yaml"), "name: packet28-rewrite\n").unwrap();
+        let config_path = hermes::config_path(home);
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        fs::write(config_path, config).unwrap();
+    }
+
+    #[test]
+    fn hermes_doctor_accepts_tagged_unrelated_config() {
+        let home = tempdir().unwrap();
+        write_hermes_fixture(
+            home.path(),
+            r#"
+workspace: !Packet28
+  id: !!str 001
+plugins:
+  enabled:
+    - packet28-rewrite
+"#,
+        );
+
+        let check = check_hermes_plugin_at(home.path());
+
+        assert!(check.ok, "{}", check.detail);
+    }
+
+    #[test]
+    fn hermes_doctor_reports_malformed_yaml() {
+        let home = tempdir().unwrap();
+        write_hermes_fixture(home.path(), "plugins: [");
+
+        let check = check_hermes_plugin_at(home.path());
+
+        assert!(
+            !check.ok && check.detail.contains("invalid YAML"),
+            "{}",
+            check.detail
+        );
+    }
 }

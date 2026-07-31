@@ -1,12 +1,16 @@
 [package]
 name = "packet28-reducer-core"
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description.workspace = true
 repository.workspace = true
 homepage.workspace = true
+
+[lints]
+workspace = true
 
 [dependencies]
 anyhow.workspace = true
@@ -16,4 +20,4 @@ regex.workspace = true
 serde.workspace = true
 shell-words.workspace = true
 serde_json.workspace = true
-suite-packet-core = { version = "0.2.0", path = "../suite-packet-core" }
+suite-packet-core.workspace = true

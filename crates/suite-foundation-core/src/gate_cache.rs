@@ -45,7 +45,7 @@ impl CoverageCache {
         }
 
         let data = std::fs::read(&path)?;
-        let result: CachedResult = bincode::deserialize(&data)
+        let result: CachedResult = wincode::deserialize(&data)
             .map_err(|e| CovyError::Cache(format!("Failed to deserialize cache: {e}")))?;
         Ok(Some(result))
     }
@@ -54,7 +54,7 @@ impl CoverageCache {
     pub fn put(&self, key: &str, result: &CachedResult) -> Result<(), CovyError> {
         std::fs::create_dir_all(&self.dir)?;
         let path = self.dir.join(key);
-        let data = bincode::serialize(result)
+        let data = wincode::serialize(result)
             .map_err(|e| CovyError::Cache(format!("Failed to serialize cache: {e}")))?;
         std::fs::write(path, data)?;
         Ok(())
@@ -82,7 +82,9 @@ impl CoverageCache {
 }
 
 /// Cached gate evaluation result.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 pub struct CachedResult {
     pub passed: bool,
     pub total_coverage_pct: Option<f64>,

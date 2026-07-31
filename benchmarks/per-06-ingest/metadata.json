@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "audit_item": "PER-06",
+  "measured_on_utc_date": "2026-07-28",
+  "baseline_source_revision": "803a8e9aa781328a351c72be83a41a67fed263ec",
+  "after_workspace_revision": "e56d3f0ede4fef1fb2a26170afcf71ee8cd5e9c2",
+  "after_production_patch_sha256": "7f65d27b25457797312a7cc55ca95ac1d3fee3cbc01aebaaad5bf636162c8c06",
+  "after_source_note": "Uncommitted PER-06 production diff atop after_workspace_revision; unrelated audit commits advanced HEAD during measurement.",
+  "toolchain": {
+    "rustc": "1.93.1 (01f6ddf75 2026-02-11)",
+    "cargo": "1.93.1 (083ac5135 2025-12-15)",
+    "target": "aarch64-apple-darwin"
+  },
+  "host": {
+    "os": "Darwin 24.6.0 arm64",
+    "cpu": "Apple M4 Pro",
+    "memory_bytes": 25769803776
+  },
+  "workloads": {
+    "lcov": {
+      "input_bytes": 988952,
+      "da_records": 50000,
+      "allocation_probe_iterations": 10
+    },
+    "diagnostics": {
+      "input_bytes": 8388659,
+      "sarif_runs": 0,
+      "ignored_padding_bytes": 8388608,
+      "allocation_probe_iterations": 10
+    }
+  },
+  "commands": [
+    "cargo run --quiet --locked --release -p covy-ingest --example ingest_allocation_probe -- --iterations 10",
+    "cargo bench --locked -p covy-ingest --bench ingest_bench -- --output-format bencher"
+  ]
+}

@@ -1,7 +1,7 @@
-use anyhow::Result;
 use clap::{Args, Subcommand};
 
 use crate::adapters;
+use crate::error::{Result, TestyCliError};
 use crate::support;
 
 #[derive(Debug, Clone, Copy)]
@@ -118,7 +118,7 @@ pub struct ImpactPlanArgs {
     #[arg(long)]
     pub max_tests: Option<usize>,
 
-    /// Target changed-lines coverage as a ratio in [0,1]
+    /// Target changed-lines coverage as a ratio in `0..=1`.
     #[arg(long)]
     pub target_coverage: Option<f64>,
 
@@ -142,6 +142,12 @@ pub struct ImpactRunArgs {
     pub command: Vec<String>,
 }
 
+/// Dispatch an impact subcommand and render its CLI output.
+///
+/// # Errors
+///
+/// Returns [`TestyCliError`] when an input, adapter, persisted state, command
+/// execution, or JSON rendering operation fails.
 pub fn run_impact_command(
     args: ImpactArgs,
     config_path: &str,
@@ -163,6 +169,12 @@ pub fn run_impact_command(
     }
 }
 
+/// Run the compatibility impact-selection command and render its CLI output.
+///
+/// # Errors
+///
+/// Returns [`TestyCliError`] when configuration, test-map loading, diff
+/// collection, impact selection, or JSON rendering fails.
 pub fn run_legacy_impact(args: LegacyImpactArgs, config_path: &str) -> Result<i32> {
     let adapters = adapters::default_impact_adapters();
     let output = testy_core::command_impact::run_legacy_impact(
@@ -267,9 +279,9 @@ fn run_impact_run(args: ImpactRunArgs, binary_name: &str) -> Result<i32> {
     }
 
     let plan_path = args.plan.ok_or_else(|| {
-        anyhow::anyhow!(
+        TestyCliError::invalid(format!(
             "Missing --plan. Use: {binary_name} impact run --plan plan.json -- <command>"
-        )
+        ))
     })?;
 
     let outcome = testy_core::command_impact::run_impact_run(

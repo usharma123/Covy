@@ -1,4 +1,4 @@
-use packet28_daemon_core::{HookEventKind, HookReducerPacket, HookRuntimeConfig};
+use packet28_daemon_protocol::hooks::{HookEventKind, HookReducerPacket, HookRuntimeConfig};
 use packet28_reducer_core::classify_command;
 use serde_json::{json, Value};
 
@@ -160,7 +160,7 @@ pub(crate) fn build_read_packet(input: &Value, response: &Value) -> Option<HookR
     let line_start = input.get("offset").and_then(Value::as_u64).unwrap_or(1);
     let count = input.get("limit").and_then(Value::as_u64).unwrap_or(1);
     let line_end = line_start.saturating_add(count.saturating_sub(1));
-    let summary = format!("Read {} lines from {}", count, path);
+    let summary = format!("Read {count} lines from {path}");
     let mut regions = json_array_strings(response, "regions");
     if regions.is_empty() {
         regions.push(format!("{path}:{line_start}-{line_end}"));
@@ -178,7 +178,7 @@ pub(crate) fn build_read_packet(input: &Value, response: &Value) -> Option<HookR
         regions,
         json_array_strings(response, "symbols"),
         Some(format!("read:{path}")),
-        Some(format!("read:{}:{}:{}", path, line_start, line_end)),
+        Some(format!("read:{path}:{line_start}:{line_end}")),
         Some(true),
         response.clone(),
         response_failed(response),

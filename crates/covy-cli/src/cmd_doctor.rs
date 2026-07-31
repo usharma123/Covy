@@ -114,7 +114,7 @@ pub fn run(args: DoctorArgs, config_path: &str) -> Result<i32> {
             total: stats.total,
             mapped_pct: pct,
             unmapped_prefixes: stats.unmapped_prefixes.clone(),
-            suggested_strip_prefixes: stats.suggested_strip_prefixes.clone(),
+            suggested_strip_prefixes: stats.suggested_strip_prefixes,
             next_step: "run covy map-paths --learn --write".to_string(),
         };
         println!("{}", serde_json::to_string_pretty(&summary)?);
@@ -122,7 +122,7 @@ pub fn run(args: DoctorArgs, config_path: &str) -> Result<i32> {
     }
 
     println!("Repo root: {}", repo_root.display());
-    println!("Parsed reports: {} files", parsed_report_paths);
+    println!("Parsed reports: {parsed_report_paths} files");
     if stats.total == 0 {
         println!("Mapped paths: 0/0 (0.0%)");
         println!("No file paths were extracted from reports.");

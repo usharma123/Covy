@@ -1,9 +1,36 @@
 mod support;
 
 use std::fs;
+use std::path::Path;
+use std::process::Command as ProcessCommand;
 
 use predicates::prelude::*;
 use support::{cli, output, stderr_text, stdout_text, write_fixture};
+
+fn initialize_git_repository(root: &Path) {
+    fs::write(root.join(".gitignore"), ".packet28/\n").unwrap();
+    let run = |args: &[&str]| {
+        let status = ProcessCommand::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git command failed: {args:?}");
+    };
+    run(&["init", "--quiet"]);
+    run(&["add", "."]);
+    run(&[
+        "-c",
+        "user.name=Packet28 Tests",
+        "-c",
+        "user.email=packet28-tests@example.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "fixture",
+    ]);
+}
 
 #[test]
 fn debug_build_prints_generation_and_file_count() {
@@ -74,6 +101,154 @@ fn p28_stats_go_to_stderr_while_hits_stay_on_stdout() {
     assert!(stderr.contains("p28_ms="));
     assert!(stderr.contains("transport="));
     assert!(stderr.contains("backend="));
+}
+
+#[test]
+fn inproc_auto_keeps_the_indexed_backend_for_a_clean_git_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fixture(dir.path());
+    initialize_git_repository(dir.path());
+    cli()
+        .args(["debug", "build", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    cli()
+        .current_dir(dir.path())
+        .args([
+            "alpha_service",
+            "--fixed-strings",
+            "--transport",
+            "inproc",
+            "--engine",
+            "auto",
+            "--stats",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "src/lib.rs:2:pub fn alpha_service() {}",
+        ))
+        .stderr(predicate::str::contains("backend=indexed_regex"));
+}
+
+#[test]
+fn inproc_auto_falls_back_for_a_dirty_tracked_non_candidate() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fixture(dir.path());
+    initialize_git_repository(dir.path());
+    cli()
+        .args(["debug", "build", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+    fs::write(
+        dir.path().join("src/filler_9.rs"),
+        "pub fn dirty_non_candidate_workspace_needle() {}\n",
+    )
+    .unwrap();
+
+    cli()
+        .current_dir(dir.path())
+        .args([
+            "dirty_non_candidate_workspace_needle",
+            "--fixed-strings",
+            "--transport",
+            "inproc",
+            "--engine",
+            "auto",
+            "--stats",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "src/filler_9.rs:1:pub fn dirty_non_candidate_workspace_needle() {}",
+        ))
+        .stderr(predicate::str::contains("backend=legacy_rg"))
+        .stderr(predicate::str::contains(
+            "workspace freshness could not be authenticated",
+        ));
+
+    cli()
+        .current_dir(dir.path())
+        .args([
+            "dirty_non_candidate_workspace_needle",
+            "--fixed-strings",
+            "--transport",
+            "inproc",
+            "--engine",
+            "indexed",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("regex search index is not ready"));
+}
+
+#[test]
+fn inproc_auto_falls_back_for_an_untracked_file() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fixture(dir.path());
+    initialize_git_repository(dir.path());
+    cli()
+        .args(["debug", "build", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+    fs::write(
+        dir.path().join("src/untracked.rs"),
+        "pub fn untracked_workspace_needle() {}\n",
+    )
+    .unwrap();
+
+    cli()
+        .current_dir(dir.path())
+        .args([
+            "untracked_workspace_needle",
+            "--fixed-strings",
+            "--transport",
+            "inproc",
+            "--engine",
+            "auto",
+            "--stats",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "src/untracked.rs:1:pub fn untracked_workspace_needle() {}",
+        ))
+        .stderr(predicate::str::contains("backend=legacy_rg"));
+}
+
+#[test]
+fn inproc_auto_falls_back_after_a_tracked_file_is_renamed() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fixture(dir.path());
+    initialize_git_repository(dir.path());
+    cli()
+        .args(["debug", "build", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+    fs::rename(
+        dir.path().join("src/lib.rs"),
+        dir.path().join("src/renamed.rs"),
+    )
+    .unwrap();
+
+    cli()
+        .current_dir(dir.path())
+        .args([
+            "alpha_service",
+            "--fixed-strings",
+            "--transport",
+            "inproc",
+            "--engine",
+            "auto",
+            "--stats",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "src/renamed.rs:2:pub fn alpha_service() {}",
+        ))
+        .stderr(predicate::str::contains("backend=legacy_rg"));
 }
 
 #[test]

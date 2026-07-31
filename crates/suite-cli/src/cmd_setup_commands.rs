@@ -1,9 +1,9 @@
 use std::path::Path;
 
-use packet28_daemon_core::RelaunchPreference;
+use packet28_daemon_protocol::hooks::{HookRuntimeConfig, RelaunchPreference};
 
 pub(super) fn apply_generated_relaunch_command(
-    config: &mut packet28_daemon_core::HookRuntimeConfig,
+    config: &mut HookRuntimeConfig,
     _root: &Path,
     packet28_agent: Option<String>,
 ) -> bool {
@@ -110,7 +110,7 @@ pub(super) fn guarded_packet28_hook_command(
     )
 }
 
-pub(super) fn resolve_packet28_mcp_command() -> String {
+pub(crate) fn resolve_packet28_mcp_command() -> String {
     let output = std::process::Command::new("which")
         .arg("packet28-mcp")
         .output();

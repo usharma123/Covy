@@ -155,7 +155,19 @@ pub struct RepoQueryPayloadRich {
     pub truncation: TruncationSummary,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    wincode::SchemaRead,
+    wincode::SchemaWrite,
+)]
 #[serde(default)]
 pub struct IndexedSymbolDef {
     pub kind: String,
@@ -163,7 +175,17 @@ pub struct IndexedSymbolDef {
     pub line: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Default,
+    PartialEq,
+    Eq,
+    wincode::SchemaRead,
+    wincode::SchemaWrite,
+)]
 #[serde(default)]
 pub struct RepoIndexFileEntry {
     pub path: String,
@@ -175,12 +197,39 @@ pub struct RepoIndexFileEntry {
     pub token_lines: BTreeMap<String, Vec<usize>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Default,
+    PartialEq,
+    Eq,
+    wincode::SchemaRead,
+    wincode::SchemaWrite,
+)]
 #[serde(default)]
 pub struct RepoIndexSnapshot {
     pub version: u32,
     pub include_tests: bool,
     pub files: BTreeMap<String, RepoIndexFileEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct RepoIndexUpdateWork {
+    /// Bytes decoded from publication manifests and generation records while fencing this update.
+    pub publication_metadata_bytes_decoded: usize,
+    /// Repository base/segment bytes decoded while validating newly persisted update artifacts.
+    pub repository_artifact_bytes_decoded: usize,
+    /// Repository base/segment artifacts decoded while validating this update.
+    pub repository_artifacts_decoded: usize,
+    /// Repository artifact bytes hashed for new digests, persisted-byte authentication, or fencing.
+    pub repository_artifact_bytes_hashed: usize,
+    /// Constant-size filesystem metadata checks performed for pinned publication artifacts.
+    pub repository_artifact_metadata_checks: usize,
+    /// Normalized changed paths considered by this update.
+    pub changed_paths_considered: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -189,20 +238,28 @@ pub struct RepoIndexUpdateSummary {
     pub indexed_files: usize,
     pub removed_files: usize,
     pub changed_paths: Vec<String>,
+    /// Bounded work performed while publishing the update.
+    pub work: RepoIndexUpdateWork,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, Default, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 #[serde(default)]
 pub(crate) struct CacheEntry {
     pub size: u64,
     pub mtime_secs: u64,
+    pub mtime_unix_nanos: Option<i128>,
+    pub content_fingerprint: String,
     pub symbols: Vec<(String, String)>,
     pub symbol_defs: Vec<IndexedSymbolDef>,
     pub imports: Vec<String>,
     pub token_lines: BTreeMap<String, Vec<usize>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, Default, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 #[serde(default)]
 pub(crate) struct RepoScanCache {
     pub version: u32,

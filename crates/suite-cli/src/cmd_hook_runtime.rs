@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use packet28_daemon_core::{HookEventKind, HookReducerPacket, HookRuntimeConfig};
+use packet28_daemon_protocol::hooks::{HookEventKind, HookReducerPacket, HookRuntimeConfig};
 use serde_json::{json, Value};
 
 use crate::cmd_hook_packets::packet_from_parts;

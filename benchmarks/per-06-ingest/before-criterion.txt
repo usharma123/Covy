@@ -1,0 +1,12 @@
+command: cargo bench --locked -p covy-ingest --bench ingest_bench -- --output-format bencher
+profile: bench (optimized)
+
+test lcov_parse ... bench:        1365 ns/iter (+/- 28)
+test lcov_scaled/public_parser/50000 ... bench:     2427487 ns/iter (+/- 33810)
+test lcov_da_fields/collect_vec ... bench:     1575131 ns/iter (+/- 19341)
+test lcov_da_fields/iterator_fields ... bench:      709080 ns/iter (+/- 13120)
+test diagnostics_whole_file/auto_path_api ... bench:     1206949 ns/iter (+/- 35868)
+test diagnostics_whole_file/single_buffer_reference ... bench:     1021997 ns/iter (+/- 42291)
+test cobertura_parse ... bench:        2413 ns/iter (+/- 40)
+test jacoco_parse ... bench:        2997 ns/iter (+/- 42)
+test gocov_parse ... bench:        3385 ns/iter (+/- 52)

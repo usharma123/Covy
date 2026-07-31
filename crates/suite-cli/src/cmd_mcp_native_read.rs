@@ -7,12 +7,25 @@ pub(crate) fn handle_packet28_read_regions(
     session: &Arc<Mutex<McpSessionState>>,
     args: Packet28ReadRegionsArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.read_regions requires task_id"));
     }
+    validated_task_storage_id(task_id)?;
     let (sequence, invocation_id) = next_task_invocation(session, task_id)?;
     let request_summary = read_regions_request_summary(&args, &args.path);
+    write_native_tool_started(
+        root,
+        session,
+        NativeToolStartedRecord {
+            task_id,
+            invocation_id: &invocation_id,
+            sequence,
+            tool_name: "packet28.read_regions",
+            operation_kind: suite_packet_core::ToolOperationKind::Read,
+            request_summary: request_summary.clone(),
+        },
+    )?;
 
     let started_at = Instant::now();
     let read_result = match packet28_reducer_core::read_regions(
@@ -177,16 +190,29 @@ pub(crate) fn handle_packet28_glob(
     session: &Arc<Mutex<McpSessionState>>,
     args: Packet28GlobArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.glob requires task_id"));
     }
+    validated_task_storage_id(task_id)?;
     let pattern = args.pattern.trim();
     if pattern.is_empty() {
         return Err(anyhow!("packet28.glob requires pattern"));
     }
     let (sequence, invocation_id) = next_task_invocation(session, task_id)?;
     let request_summary = glob_request_summary(&args);
+    write_native_tool_started(
+        root,
+        session,
+        NativeToolStartedRecord {
+            task_id,
+            invocation_id: &invocation_id,
+            sequence,
+            tool_name: "packet28.glob",
+            operation_kind: suite_packet_core::ToolOperationKind::Search,
+            request_summary: request_summary.clone(),
+        },
+    )?;
     let started_at = Instant::now();
     let (resolved_paths, mut matches) = match collect_glob_matches(root, pattern, &args.paths) {
         Ok(result) => result,
@@ -238,8 +264,8 @@ pub(crate) fn handle_packet28_glob(
         "resolved_paths": resolved_paths,
         "match_count": matches.len(),
         "truncated": truncated,
-        "paths": matched_paths.clone(),
-        "symbols": symbols.clone(),
+        "paths": matched_paths,
+        "symbols": symbols,
         "compact_preview": compact_preview,
         "response_mode": "full",
     });
@@ -252,13 +278,13 @@ pub(crate) fn handle_packet28_glob(
     let payload = match args.response_mode {
         Packet28SearchResponseMode::Full => {
             let mut payload = full_payload.clone();
-            payload["artifact_id"] = json!(artifact_id.clone());
+            payload["artifact_id"] = json!(artifact_id);
             payload
         }
         Packet28SearchResponseMode::Slim => json!({
             "match_count": matches.len(),
             "compact_preview": slim_preview,
-            "artifact_id": artifact_id.clone(),
+            "artifact_id": artifact_id,
             "response_mode": "slim",
         }),
     };

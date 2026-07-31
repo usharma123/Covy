@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACKET28_BIN="${BENCH_PACKET28_BIN:-$ROOT_DIR/target/debug/Packet28}"
 
 if [[ "${BENCH_SKIP_BUILD:-0}" != "1" ]]; then
-  cargo build -q -p suite-cli --bin Packet28 -p packet28d --bin packet28d
+  cargo build --locked -q -p suite-cli --bin Packet28 -p packet28d --bin packet28d
 fi
 
 python3 - "$ROOT_DIR" "$PACKET28_BIN" <<'PY'
@@ -31,7 +31,7 @@ CASES = [
         "action": "inspect",
         "query": "Where is BrokerWriteStateRequest defined?",
         "search_query": "BrokerWriteStateRequest",
-        "expected_path": "crates/packet28-daemon-core/src/lib.rs",
+        "expected_path": "crates/packet28-daemon-protocol/src/broker.rs",
         "expected_snippets": ["pub struct BrokerWriteStateRequest"],
         "rg_terms": ["BrokerWriteStateRequest"],
         "rg_paths": ["crates"],
@@ -42,10 +42,10 @@ CASES = [
         "action": "inspect",
         "query": "Where is build_code_evidence_summary defined?",
         "search_query": "build_code_evidence_summary",
-        "expected_path": "crates/packet28d/src/main.rs",
+        "expected_path": "crates/packet28d/src/broker/search.rs",
         "expected_snippets": ["fn build_code_evidence_summary"],
         "rg_terms": ["build_code_evidence_summary"],
-        "rg_paths": ["crates/packet28d/src/main.rs"],
+        "rg_paths": ["crates/packet28d/src/broker/search.rs"],
     },
     {
         "name": "apache_abbreviate_test",

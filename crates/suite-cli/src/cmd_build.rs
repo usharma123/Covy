@@ -28,7 +28,7 @@ pub struct ReduceArgs {
     #[arg(long)]
     max_diagnostics: Option<usize>,
 
-    /// Persist kernel cache on disk under <cwd>/.packet28
+    /// Persist kernel cache on disk under `<cwd>/.packet28`.
     #[arg(long)]
     cache: bool,
 
@@ -274,7 +274,7 @@ fn handle_reduce_response(
         return Ok(0);
     }
 
-    let payload = packet.payload.clone();
+    let payload = packet.payload;
     println!(
         "summary: total={} unique={} duplicates_removed={}",
         payload.total_diagnostics, payload.unique_diagnostics, payload.duplicates_removed

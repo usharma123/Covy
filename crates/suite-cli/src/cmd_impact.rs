@@ -33,7 +33,7 @@ pub struct ImpactArgs {
     #[arg(long)]
     pub print_command: bool,
 
-    /// Persist kernel cache on disk under <cwd>/.packet28
+    /// Persist kernel cache on disk under `<cwd>/.packet28`.
     #[arg(long)]
     pub cache: bool,
 
@@ -127,7 +127,7 @@ pub fn run(args: ImpactArgs, config_path: &str) -> Result<i32> {
             print_command: args.print_command,
             config_path: resolved_config_path,
         })?,
-        policy_context: policy_context.clone(),
+        policy_context,
         ..context_kernel_core::KernelRequest::default()
     })?;
 
@@ -202,7 +202,7 @@ pub fn run_remote(args: ImpactArgs, config_path: &str, daemon_root: &Path) -> Re
                 print_command: args.print_command,
                 config_path: resolved_config_path,
             })?,
-            policy_context: policy_context.clone(),
+            policy_context,
             ..context_kernel_core::KernelRequest::default()
         },
     )?;

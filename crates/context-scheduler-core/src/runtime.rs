@@ -162,6 +162,10 @@ fn validate_request(request: &ScheduleRequest) -> Result<(), ScheduleError> {
     Ok(())
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "the ready queue contains only IDs inserted into steps_by_id in the same function"
+)]
 fn topological_order(steps: &[ScheduleStep]) -> Result<Vec<ScheduleStep>, ScheduleError> {
     let mut indegree = HashMap::<String, usize>::new();
     let mut outgoing = HashMap::<String, Vec<String>>::new();

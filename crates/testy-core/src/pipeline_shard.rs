@@ -1,11 +1,13 @@
-use anyhow::{Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use suite_packet_core::gate::ImpactResult;
 use suite_packet_core::shard::{ShardPlan, TaskSet};
 
-pub type ShardError = anyhow::Error;
+use crate::error::{Result, TestyError};
+
+/// Error returned by shard planning and timing updates.
+pub type ShardError = TestyError;
 
 #[derive(Debug, Clone)]
 pub struct ShardRequest {
@@ -93,7 +95,13 @@ struct PlanningTask {
     tags: Vec<String>,
 }
 
-pub fn run_shard(req: ShardRequest) -> Result<ShardResponse, ShardError> {
+/// Plan shards or update persisted timing history.
+///
+/// # Errors
+///
+/// Returns [`ShardError`] for invalid requests, malformed task/timing inputs,
+/// state codec failures, or filesystem failures.
+pub fn run_shard(req: ShardRequest) -> Result<ShardResponse> {
     match req.mode {
         ShardMode::Plan(plan) => run_plan(plan),
         ShardMode::Update(update) => run_update(update),
@@ -103,13 +111,15 @@ pub fn run_shard(req: ShardRequest) -> Result<ShardResponse, ShardError> {
 fn run_plan(args: ShardPlanRequest) -> Result<ShardResponse> {
     let tasks = load_tasks(&args)?;
     if tasks.is_empty() {
-        anyhow::bail!("No tasks provided for shard planning");
+        return Err(TestyError::invalid("No tasks provided for shard planning"));
     }
 
     let total_tasks = tasks.len();
     let (tasks, filtered_out) = apply_tag_filters(tasks, &args)?;
     if tasks.is_empty() {
-        anyhow::bail!("No tasks remained after applying tier/tag filters");
+        return Err(TestyError::invalid(
+            "No tasks remained after applying tier/tag filters",
+        ));
     }
 
     let tests: Vec<String> = tasks.into_iter().map(|task| task.id).collect();
@@ -150,13 +160,17 @@ fn run_update(args: ShardUpdateRequest) -> Result<ShardResponse> {
     let junit_files = resolve_globs(&args.junit_xml)?;
     let jsonl_files = resolve_globs(&args.timings_jsonl)?;
     if junit_files.is_empty() && jsonl_files.is_empty() {
-        anyhow::bail!("No timing inputs found. Provide --junit-xml and/or --timings-jsonl.");
+        return Err(TestyError::invalid(
+            "No timing inputs found. Provide --junit-xml and/or --timings-jsonl.",
+        ));
     }
 
     let observations =
         load_timing_observations(&junit_files, &jsonl_files, args.junit_id_granularity)?;
     if observations.is_empty() {
-        anyhow::bail!("No timing observations found in provided inputs.");
+        return Err(TestyError::invalid(
+            "No timing observations found in provided inputs.",
+        ));
     }
 
     let updated = apply_timing_observations(&mut timings, &observations);
@@ -194,7 +208,9 @@ fn load_tasks(args: &ShardPlanRequest) -> Result<Vec<PlanningTask>> {
     .count();
 
     if provided != 1 {
-        anyhow::bail!("Provide exactly one of --tasks-json, --tests-file, or --impact-json");
+        return Err(TestyError::invalid(
+            "Provide exactly one of --tasks-json, --tests-file, or --impact-json",
+        ));
     }
 
     if let Some(path) = &args.tasks_json {
@@ -208,7 +224,7 @@ fn load_tasks(args: &ShardPlanRequest) -> Result<Vec<PlanningTask>> {
 
 fn load_tasks_from_file(path: &Path) -> Result<Vec<PlanningTask>> {
     let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read tests file {}", path.display()))?;
+        .map_err(|source| TestyError::io("Failed to read tests file", path, source))?;
     let tests = content
         .lines()
         .map(str::trim)
@@ -232,7 +248,7 @@ const IMPACT_RESULT_EXAMPLE: &str = r#"{
 
 fn load_tasks_from_impact_json(path: &Path) -> Result<Vec<PlanningTask>> {
     let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read impact JSON {}", path.display()))?;
+        .map_err(|source| TestyError::io("Failed to read impact JSON", path, source))?;
     let impact: ImpactResult =
         deserialize_json_with_example(&content, "ImpactResult", IMPACT_RESULT_EXAMPLE)?;
     Ok(impact
@@ -255,7 +271,7 @@ const TASKSET_EXAMPLE: &str = r#"{
 
 fn load_tasks_from_tasks_json(path: &Path) -> Result<Vec<PlanningTask>> {
     let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read tasks JSON {}", path.display()))?;
+        .map_err(|source| TestyError::io("Failed to read tasks JSON", path, source))?;
     let tasks: TaskSet = deserialize_json_with_example(&content, "TaskSet", TASKSET_EXAMPLE)?;
     let ids = tasks
         .tasks
@@ -285,10 +301,12 @@ fn apply_tag_filters(
             .iter()
             .map(normalize_tag)
             .collect(),
-        _ => anyhow::bail!(
-            "Unsupported tier '{}'. Expected 'pr' or 'nightly'",
-            args.tier
-        ),
+        _ => {
+            return Err(TestyError::invalid(format!(
+                "Unsupported tier '{}'. Expected 'pr' or 'nightly'",
+                args.tier
+            )))
+        }
     };
     exclude.extend(args.exclude_tag.iter().map(normalize_tag));
     let include: BTreeSet<String> = args.include_tag.iter().map(normalize_tag).collect();
@@ -319,27 +337,38 @@ fn load_timings(path: &Path) -> Result<crate::testmap::TestTimingHistory> {
         return Ok(crate::testmap::TestTimingHistory::default());
     }
     let bytes = std::fs::read(path)
-        .with_context(|| format!("Failed to read timings file {}", path.display()))?;
-    crate::cache::deserialize_test_timings(&bytes).map_err(Into::into)
+        .map_err(|source| TestyError::io("Failed to read timings file", path, source))?;
+    crate::cache::deserialize_test_timings(&bytes)
+        .map_err(|source| TestyError::state("Failed to decode timings file", path, source))
 }
 
 fn write_timings(path: &Path, timings: &crate::testmap::TestTimingHistory) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).map_err(|source| {
+            TestyError::io("Failed to create timings parent directory", parent, source)
+        })?;
     }
-    let bytes = crate::cache::serialize_test_timings(timings)?;
+    let bytes = crate::cache::serialize_test_timings(timings)
+        .map_err(|source| TestyError::state("Failed to encode timings file", path, source))?;
     std::fs::write(path, bytes)
-        .with_context(|| format!("Failed to write timings file {}", path.display()))?;
+        .map_err(|source| TestyError::io("Failed to write timings file", path, source))?;
     Ok(())
 }
 
 fn write_timings_json(path: &Path, timings: &crate::testmap::TestTimingHistory) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).map_err(|source| {
+            TestyError::io(
+                "Failed to create timings JSON parent directory",
+                parent,
+                source,
+            )
+        })?;
     }
-    let json = serde_json::to_string_pretty(timings)?;
+    let json = serde_json::to_string_pretty(timings)
+        .map_err(|source| TestyError::json("Failed to encode timings JSON", source, None))?;
     std::fs::write(path, json)
-        .with_context(|| format!("Failed to write timings JSON {}", path.display()))?;
+        .map_err(|source| TestyError::io("Failed to write timings JSON", path, source))?;
     Ok(())
 }
 
@@ -347,7 +376,10 @@ fn resolve_globs(patterns: &[String]) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for pattern in patterns {
         let matches: Vec<_> = glob::glob(pattern)
-            .with_context(|| format!("Invalid glob pattern: {pattern}"))?
+            .map_err(|source| TestyError::GlobPattern {
+                pattern: pattern.clone(),
+                source,
+            })?
             .filter_map(|r| r.ok())
             .collect();
         if matches.is_empty() {
@@ -431,7 +463,8 @@ fn apply_timing_observations(
 
 fn write_shard_files(dir: &str, plan: &ShardPlan) -> Result<()> {
     let dir = PathBuf::from(dir);
-    std::fs::create_dir_all(&dir)?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|source| TestyError::io("Failed to create shard directory", &dir, source))?;
     for shard in &plan.shards {
         let path = dir.join(format!("shard-{}.txt", shard.id + 1));
         let content = if shard.tests.is_empty() {
@@ -439,7 +472,8 @@ fn write_shard_files(dir: &str, plan: &ShardPlan) -> Result<()> {
         } else {
             format!("{}\n", shard.tests.join("\n"))
         };
-        std::fs::write(path, content)?;
+        std::fs::write(&path, content)
+            .map_err(|source| TestyError::io("Failed to write shard file", &path, source))?;
     }
     Ok(())
 }
@@ -448,9 +482,13 @@ fn deserialize_json_with_example<T: serde::de::DeserializeOwned>(
     input: &str,
     type_name: &str,
     example: &str,
-) -> anyhow::Result<T> {
-    serde_json::from_str(input).map_err(|e| {
-        anyhow::anyhow!("Failed to parse {type_name}: {e}\n\nExpected JSON shape:\n{example}")
+) -> Result<T> {
+    serde_json::from_str(input).map_err(|source| {
+        TestyError::json(
+            format!("Failed to parse {type_name}"),
+            source,
+            Some(example),
+        )
     })
 }
 

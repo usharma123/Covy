@@ -8,8 +8,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+
+use crate::{DaemonCoreError, Result};
 
 /// Trust status for a project-local filter.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -26,14 +27,18 @@ pub enum TrustStatus {
 /// An entry in the trust store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrustEntry {
+    /// Display path used to identify the trusted filter.
     pub path: String,
+    /// BLAKE3 hash of the content that was explicitly trusted.
     pub content_hash: String,
+    /// Unix timestamp at which this content was trusted.
     pub trusted_at_unix: u64,
 }
 
 /// The trust store, persisted as JSON.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TrustStore {
+    /// Trust entries keyed by their display path.
     pub entries: BTreeMap<String, TrustEntry>,
 }
 
@@ -49,30 +54,51 @@ pub fn default_trust_store_path() -> PathBuf {
 }
 
 /// Load the trust store from disk.
+///
+/// A missing path produces an empty trust store.
+///
+/// # Errors
+///
+/// Returns [`DaemonCoreError::Io`] if an existing store cannot be read, or
+/// [`DaemonCoreError::Json`] if its JSON is malformed.
 pub fn load_trust_store(path: &Path) -> Result<TrustStore> {
     if !path.exists() {
         return Ok(TrustStore::default());
     }
     let raw = fs::read_to_string(path)
-        .with_context(|| format!("failed to read trust store '{}'", path.display()))?;
-    let store: TrustStore = serde_json::from_str(&raw)
-        .with_context(|| format!("failed to parse trust store '{}'", path.display()))?;
+        .map_err(|source| DaemonCoreError::io("failed to read trust store", path, source))?;
+    let store: TrustStore = serde_json::from_str(&raw).map_err(|source| {
+        DaemonCoreError::json("failed to decode trust store from", path, source)
+    })?;
     Ok(store)
 }
 
 /// Save the trust store to disk.
+///
+/// # Errors
+///
+/// Returns [`DaemonCoreError::Json`] if the store cannot be encoded. Returns
+/// [`DaemonCoreError::Io`] if its parent directory cannot be created or the
+/// store cannot be written.
 pub fn save_trust_store(path: &Path, store: &TrustStore) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create directory '{}'", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|source| {
+            DaemonCoreError::io("failed to create trust store directory", parent, source)
+        })?;
     }
-    let json = serde_json::to_string_pretty(store)?;
+    let json = serde_json::to_string_pretty(store).map_err(|source| {
+        DaemonCoreError::json("failed to encode trust store for", path, source)
+    })?;
     fs::write(path, json)
-        .with_context(|| format!("failed to write trust store '{}'", path.display()))?;
+        .map_err(|source| DaemonCoreError::io("failed to write trust store", path, source))?;
     Ok(())
 }
 
 /// Trust a filter at its current content hash.
+///
+/// # Errors
+///
+/// Returns [`DaemonCoreError::Io`] if `filter_path` cannot be read.
 pub fn trust_filter(store: &mut TrustStore, filter_path: &Path) -> Result<()> {
     let canonical = filter_path.display().to_string();
     let hash = compute_content_hash(filter_path)?;
@@ -92,6 +118,11 @@ pub fn trust_filter(store: &mut TrustStore, filter_path: &Path) -> Result<()> {
 }
 
 /// Check the trust status of a project-local filter.
+///
+/// # Errors
+///
+/// Returns [`DaemonCoreError::Io`] if a previously trusted filter cannot be
+/// read to recompute its content hash.
 pub fn verify_project_filter(store: &TrustStore, filter_path: &Path) -> Result<TrustStatus> {
     let canonical = filter_path.display().to_string();
     let Some(entry) = store.entries.get(&canonical) else {
@@ -112,8 +143,8 @@ pub fn revoke_trust(store: &mut TrustStore, filter_path: &Path) {
 }
 
 fn compute_content_hash(path: &Path) -> Result<String> {
-    let contents =
-        fs::read(path).with_context(|| format!("failed to read '{}'", path.display()))?;
+    let contents = fs::read(path)
+        .map_err(|source| DaemonCoreError::io("failed to read trusted filter", path, source))?;
     Ok(blake3::hash(&contents).to_hex().to_string())
 }
 

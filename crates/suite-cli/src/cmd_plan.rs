@@ -2,7 +2,9 @@ use std::fs;
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand};
-use packet28_daemon_core::{BrokerPlanStep, BrokerValidatePlanRequest, BrokerValidatePlanResponse};
+use packet28_daemon_protocol::broker::{
+    BrokerPlanStep, BrokerValidatePlanRequest, BrokerValidatePlanResponse,
+};
 
 #[derive(Args)]
 pub struct PlanArgs {

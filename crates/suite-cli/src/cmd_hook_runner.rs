@@ -5,11 +5,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use packet28_daemon_core::{
-    load_task_registry, now_unix, task_artifact_dir, ActiveTaskRecord, HookBoundaryKind,
-    HookEventKind, HookIngestRequest, HookLifecycleEvent, HookLifecycleKind, HookReducerCacheEntry,
-    HookReducerPacket, TaskRecord,
+use packet28_daemon_core::storage::{load_task_registry, now_unix};
+use packet28_daemon_core::task_store_lease::acquire_task_store_writer_lease;
+use packet28_daemon_protocol::hooks::{
+    ActiveTaskRecord, HookBoundaryKind, HookEventKind, HookIngestRequest, HookLifecycleEvent,
+    HookLifecycleKind, HookReducerCacheEntry, HookReducerPacket,
 };
+use packet28_daemon_protocol::paths::{task_artifact_dir, TaskStorageId};
+use packet28_daemon_protocol::task::TaskRecord;
 use packet28_reducer_core::{
     classify_command, classify_command_argv, reduce_command_output, CommandReducerSpec,
 };
@@ -23,21 +26,19 @@ use crate::cmd_hook::{
 pub(crate) fn run_reducer_runner(args: ReducerRunnerArgs) -> Result<i32> {
     let root = crate::broker_client::resolve_root(&args.root);
     crate::broker_client::ensure_daemon(&root)?;
+    let _writer_lease = acquire_task_store_writer_lease(&root)?;
     if args.argv.is_empty() {
         return Err(anyhow!("reducer-runner requires a command after '--'"));
     }
 
-    let task_id = if let Some(task_id) = args
-        .task_id
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-    {
+    let task_id = if let Some(task_id) = args.task_id.clone() {
         task_id
-    } else if let Some(active) = crate::task_runtime::load_active_task(&root) {
+    } else if let Some(active) = crate::task_runtime::load_active_task(&root)? {
         active.task_id
     } else {
         crate::broker_client::derive_task_id("claude-hook-runner")
     };
+    let task_storage_id = TaskStorageId::try_from(task_id.as_str())?;
     crate::task_runtime::store_active_task(
         &root,
         &ActiveTaskRecord {
@@ -100,16 +101,11 @@ pub(crate) fn run_reducer_runner(args: ReducerRunnerArgs) -> Result<i32> {
     }
 
     let command_id = format!("runner-{}", now_unix_millis());
-    let spool_dir = task_artifact_dir(&root, &task_id).join("hook-spool");
-    fs::create_dir_all(&spool_dir)?;
+    let spool_dir = task_artifact_dir(&root, &task_storage_id).join("hook-spool");
     let stdout_path = spool_dir.join(format!("{command_id}-stdout.log"));
     let stderr_path = spool_dir.join(format!("{command_id}-stderr.log"));
-    let stdout_file = File::create(&stdout_path)
-        .with_context(|| format!("failed to create '{}'", stdout_path.display()))?;
-    let stderr_file = File::create(&stderr_path)
-        .with_context(|| format!("failed to create '{}'", stderr_path.display()))?;
 
-    let _ = crate::broker_client::hook_ingest(
+    let admission = crate::broker_client::hook_ingest(
         &root,
         HookIngestRequest {
             task_id: task_id.clone(),
@@ -132,6 +128,17 @@ pub(crate) fn run_reducer_runner(args: ReducerRunnerArgs) -> Result<i32> {
             host_context_budget_tokens: None,
         },
     )?;
+    if !admission.accepted {
+        return Err(anyhow!(
+            "reducer-runner task admission was rejected for '{task_id}'"
+        ));
+    }
+
+    fs::create_dir_all(&spool_dir)?;
+    let stdout_file = File::create(&stdout_path)
+        .with_context(|| format!("failed to create '{}'", stdout_path.display()))?;
+    let stderr_file = File::create(&stderr_path)
+        .with_context(|| format!("failed to create '{}'", stderr_path.display()))?;
 
     let started = Instant::now();
     let mut child = Command::new(&args.argv[0])
@@ -274,7 +281,10 @@ pub(crate) fn run_reducer_runner(args: ReducerRunnerArgs) -> Result<i32> {
                 cache_fingerprint: Some(reduced.cache_fingerprint),
                 cacheable: Some(reduced.cacheable),
                 mutation: Some(reduced.mutation),
-                raw_artifact_handle: Some(stdout_path.display().to_string()),
+                raw_artifact_handle: stdout_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_owned),
                 raw_artifact_available: true,
                 artifact: Some(artifact),
             }),
@@ -291,7 +301,7 @@ pub(crate) fn run_reduce_fixture(args: ReduceFixtureArgs) -> Result<i32> {
         .with_context(|| format!("failed to read fixture '{}'", args.stdout_path))?;
     let stderr = if let Some(stderr_path) = args.stderr_path.as_ref() {
         fs::read_to_string(stderr_path)
-            .with_context(|| format!("failed to read fixture '{}'", stderr_path))?
+            .with_context(|| format!("failed to read fixture '{stderr_path}'"))?
     } else {
         String::new()
     };

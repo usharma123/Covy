@@ -108,3 +108,67 @@ fn test_testy_shard_smoke() {
         .success()
         .stdout(predicate::str::contains("\"shards\""));
 }
+
+#[test]
+fn test_testy_shard_rejects_malformed_config() {
+    let dir = TempDir::new().unwrap();
+    let config = dir.path().join("covy.toml");
+    let tests_file = dir.path().join("tests.txt");
+    std::fs::write(&config, "[shard\nalgorithm = \"lpt\"").unwrap();
+    std::fs::write(&tests_file, "com.foo.A\n").unwrap();
+
+    testy_cmd()
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "shard",
+            "plan",
+            "--shards",
+            "1",
+            "--tests-file",
+            tests_file.to_str().unwrap(),
+        ])
+        .assert()
+        .code(2)
+        .stderr(
+            predicate::str::contains("failed to parse config at")
+                .and(predicate::str::contains(config.to_str().unwrap())),
+        );
+}
+
+#[test]
+fn test_testy_missing_impact_plan_preserves_error_output_and_exit_code() {
+    testy_cmd()
+        .args(["impact", "run", "--", "cargo", "test"])
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr("error: Missing --plan. Use: testy impact run --plan plan.json -- <command>\n");
+}
+
+#[test]
+fn test_testy_missing_impact_plan_file_preserves_source_reporting() {
+    let directory = TempDir::new().unwrap();
+    let missing_plan = directory.path().join("missing-plan.json");
+
+    testy_cmd()
+        .args([
+            "impact",
+            "run",
+            "--plan",
+            missing_plan.to_str().unwrap(),
+            "--",
+            "true",
+        ])
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr(
+            predicate::str::contains(format!(
+                "error: Failed to read plan at {}",
+                missing_plan.display()
+            ))
+            .and(predicate::str::contains("caused by:"))
+            .and(predicate::str::contains("No such file or directory")),
+        );
+}

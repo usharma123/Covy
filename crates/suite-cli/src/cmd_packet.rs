@@ -68,7 +68,7 @@ pub fn run_fetch_remote(args: FetchArgs, daemon_root: &Path) -> Result<i32> {
     let root = std::path::PathBuf::from(&resolved_root);
     let response = crate::cmd_daemon::send_packet_fetch(
         daemon_root,
-        packet28_daemon_core::PacketFetchRequest {
+        packet28_daemon_protocol::commands::PacketFetchRequest {
             handle: args.handle.clone(),
             root: resolved_root,
         },

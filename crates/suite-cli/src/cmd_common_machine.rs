@@ -37,11 +37,7 @@ pub fn resolve_machine_profile(
     if let Some(profile) = json_profile {
         if let Some(fmt) = legacy_format {
             if !fmt.eq_ignore_ascii_case("json") {
-                anyhow::bail!(
-                    "Conflicting output flags: --json and {} {}",
-                    legacy_flag_name,
-                    fmt
-                );
+                anyhow::bail!("Conflicting output flags: --json and {legacy_flag_name} {fmt}");
             }
         }
         return Ok(Some(profile.into()));

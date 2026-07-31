@@ -1,44 +1,30 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+pub use suite_packet_core::memory::{
+    CachePacket, ContextStoreEntryDetail, ContextStoreEntrySummary, ContextStorePruneReport,
+    ContextStoreStats, DeltaReuse, EvictionCounters, EvictionReason, PacketCacheEntry,
+    RecallBudgetEstimate, RecallHit, RecallMode, RecallSourceTier,
+};
 pub use suite_packet_core::{MemoryKind, MemorySourceTier};
 
 use crate::PacketCache;
 
 pub const DEFAULT_PERSIST_TTL_SECS: u64 = 86_400;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum EvictionReason {
-    ExpiredTtl,
-    ManualPrune,
-    VersionMismatch,
-    CorruptLoadRecovery,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct EvictionCounters {
-    pub expired_ttl: usize,
-    pub manual_prune: usize,
-    pub version_mismatch: usize,
-    pub corrupt_load_recovery: usize,
-}
-
-impl EvictionCounters {
-    pub(crate) fn add(&mut self, reason: EvictionReason, count: usize) {
-        match reason {
-            EvictionReason::ExpiredTtl => self.expired_ttl = self.expired_ttl.saturating_add(count),
-            EvictionReason::ManualPrune => {
-                self.manual_prune = self.manual_prune.saturating_add(count)
-            }
-            EvictionReason::VersionMismatch => {
-                self.version_mismatch = self.version_mismatch.saturating_add(count)
-            }
-            EvictionReason::CorruptLoadRecovery => {
-                self.corrupt_load_recovery = self.corrupt_load_recovery.saturating_add(count)
-            }
+pub(crate) fn add_evictions(counters: &mut EvictionCounters, reason: EvictionReason, count: usize) {
+    match reason {
+        EvictionReason::ExpiredTtl => {
+            counters.expired_ttl = counters.expired_ttl.saturating_add(count)
+        }
+        EvictionReason::ManualPrune => {
+            counters.manual_prune = counters.manual_prune.saturating_add(count)
+        }
+        EvictionReason::VersionMismatch => {
+            counters.version_mismatch = counters.version_mismatch.saturating_add(count)
+        }
+        EvictionReason::CorruptLoadRecovery => {
+            counters.corrupt_load_recovery = counters.corrupt_load_recovery.saturating_add(count)
         }
     }
 }
@@ -66,44 +52,10 @@ impl Default for ContextStorePaging {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct ContextStoreEntrySummary {
-    pub cache_key: String,
-    pub target: String,
-    pub input_hash: String,
-    pub created_at_unix: u64,
-    pub age_secs: u64,
-    pub packet_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContextStoreEntryDetail {
-    pub entry: PacketCacheEntry,
-    pub age_secs: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct ContextStoreStats {
-    pub entries: usize,
-    pub oldest_created_at_unix: Option<u64>,
-    pub newest_created_at_unix: Option<u64>,
-    pub evictions: EvictionCounters,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct ContextStorePruneRequest {
     pub all: bool,
     pub ttl_secs: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct ContextStorePruneReport {
-    pub removed: usize,
-    pub remaining: usize,
-    pub reasons: EvictionCounters,
 }
 
 #[derive(Debug, Clone)]
@@ -148,46 +100,6 @@ pub enum RecallScope {
     TaskOnly,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct RecallBudgetEstimate {
-    pub est_tokens: u64,
-    pub est_bytes: u64,
-    pub runtime_ms: u64,
-}
-
-pub type RecallSourceTier = MemorySourceTier;
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RecallMode {
-    #[default]
-    Auto,
-    Conceptual,
-    Telemetry,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct RecallHit {
-    pub cache_key: String,
-    pub target: String,
-    pub created_at_unix: u64,
-    pub age_secs: u64,
-    pub score: f64,
-    pub summary: Option<String>,
-    pub snippet: String,
-    pub matched_tokens: Vec<String>,
-    pub matched_paths: Vec<String>,
-    pub matched_symbols: Vec<String>,
-    pub match_reasons: Vec<String>,
-    pub packet_types: Vec<String>,
-    pub task_ids: Vec<String>,
-    pub budget_estimate: RecallBudgetEstimate,
-    pub source_tier: RecallSourceTier,
-    pub memory_kind: MemoryKind,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct NormalizedPathRef {
@@ -223,34 +135,6 @@ impl PersistConfig {
         self.ttl_secs = ttl_secs;
         self
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct CachePacket {
-    pub packet_id: Option<String>,
-    pub body: Value,
-    pub token_usage: Option<u64>,
-    pub runtime_ms: Option<u64>,
-    pub metadata: Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct DeltaReuse {
-    pub reused_from: Option<String>,
-    pub delta_ratio: Option<f64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PacketCacheEntry {
-    pub cache_key: String,
-    pub target: String,
-    pub input_hash: String,
-    pub created_at_unix: u64,
-    pub packets: Vec<CachePacket>,
-    pub metadata: Value,
-    pub delta_reuse: DeltaReuse,
 }
 
 #[derive(Debug, Clone)]

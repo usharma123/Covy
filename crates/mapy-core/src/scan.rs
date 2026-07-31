@@ -3,9 +3,104 @@ use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::Metadata;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use ignore::WalkBuilder;
+use packet28_state_fs::StateDir;
 use suite_packet_core::CovyError;
+
+const MAX_REPO_SCAN_CACHE_BYTES: u64 = 512 * 1024 * 1024;
+
+pub(crate) struct RepoScanAccumulator {
+    root: PathBuf,
+    cache: RepoScanCache,
+    cache_dirty: bool,
+    seen: BTreeSet<String>,
+    out: Vec<FileScan>,
+}
+
+impl RepoScanAccumulator {
+    pub(crate) fn new(root: &Path, source_paths: &[String]) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            cache: load_scan_cache(root),
+            cache_dirty: false,
+            seen: source_paths.iter().cloned().collect(),
+            out: Vec::new(),
+        }
+    }
+
+    pub(crate) fn ingest(&mut self, rel: &str, metadata: &Metadata, bytes: &[u8]) {
+        let size = metadata.len();
+        let mtime_secs = metadata_mtime_secs(metadata);
+        let mtime_unix_nanos = metadata_mtime_unix_nanos(metadata);
+        let Ok(content) = std::str::from_utf8(bytes) else {
+            self.cache_dirty |= self.cache.files.remove(rel).is_some();
+            return;
+        };
+        let content_fingerprint = content_fingerprint(content);
+
+        if let Some(entry) = self.cache.files.get_mut(rel) {
+            if entry.size == size && entry.content_fingerprint == content_fingerprint {
+                if entry.mtime_secs != mtime_secs || entry.mtime_unix_nanos != mtime_unix_nanos {
+                    entry.mtime_secs = mtime_secs;
+                    entry.mtime_unix_nanos = mtime_unix_nanos;
+                    self.cache_dirty = true;
+                }
+                self.out.push(FileScan {
+                    path: rel.to_string(),
+                    size,
+                    symbols: entry.symbols.clone(),
+                    symbol_defs: entry.symbol_defs.clone(),
+                    imports: entry.imports.clone(),
+                    token_lines: entry.token_lines.clone(),
+                    mtime_secs,
+                });
+                return;
+            }
+        }
+
+        let (symbol_defs, imports, token_lines) = extract_index_metadata(rel, content);
+        let symbols = symbol_defs
+            .iter()
+            .map(|symbol| (symbol.kind.clone(), symbol.name.clone()))
+            .collect::<Vec<_>>();
+        self.cache.files.insert(
+            rel.to_string(),
+            CacheEntry {
+                size,
+                mtime_secs,
+                mtime_unix_nanos,
+                content_fingerprint,
+                symbols: symbols.clone(),
+                symbol_defs: symbol_defs.clone(),
+                imports: imports.clone(),
+                token_lines: token_lines.clone(),
+            },
+        );
+        self.cache_dirty = true;
+        self.out.push(FileScan {
+            path: rel.to_string(),
+            size,
+            symbols,
+            symbol_defs,
+            imports,
+            token_lines,
+            mtime_secs,
+        });
+    }
+
+    pub(crate) fn finish(mut self) -> Vec<FileScan> {
+        let original_cache_len = self.cache.files.len();
+        self.cache.files.retain(|path, _| self.seen.contains(path));
+        self.cache_dirty |= self.cache.files.len() != original_cache_len;
+        if self.cache_dirty {
+            write_scan_cache(&self.root, &self.cache);
+        }
+        self.out.sort_by(|left, right| left.path.cmp(&right.path));
+        self.out
+    }
+}
 
 pub(crate) fn scan_repo(root: &Path, include_tests: bool) -> Result<Vec<FileScan>, CovyError> {
     scan_repo_with_progress(root, include_tests, |_, _| {})
@@ -19,11 +114,8 @@ pub(crate) fn scan_repo_with_progress<F>(
 where
     F: FnMut(usize, usize),
 {
-    let mut out = Vec::new();
-    let mut cache = load_scan_cache(root);
-    let mut cache_dirty = false;
     let source_paths = discover_source_paths(root, include_tests)?;
-    let seen = source_paths.iter().cloned().collect::<BTreeSet<_>>();
+    let mut accumulator = RepoScanAccumulator::new(root, &source_paths);
     let total_files = source_paths.len();
     on_progress(0, total_files);
 
@@ -37,71 +129,17 @@ where
                 continue;
             }
         };
-        let size = metadata.len();
-        let mtime_secs = metadata_mtime_secs(&metadata);
-        if let Some(entry) = cache.files.get(rel) {
-            if entry.size == size && entry.mtime_secs == mtime_secs {
-                out.push(FileScan {
-                    path: rel.clone(),
-                    size,
-                    symbols: entry.symbols.clone(),
-                    symbol_defs: entry.symbol_defs.clone(),
-                    imports: entry.imports.clone(),
-                    token_lines: entry.token_lines.clone(),
-                    mtime_secs,
-                });
-                on_progress(idx + 1, total_files);
-                continue;
-            }
-        }
-
-        let content = match std::fs::read_to_string(&path) {
-            Ok(v) => v,
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
             Err(_) => {
                 on_progress(idx + 1, total_files);
                 continue;
             }
         };
-
-        let (symbol_defs, imports, token_lines) = extract_index_metadata(rel, &content);
-        let symbols = symbol_defs
-            .iter()
-            .map(|symbol| (symbol.kind.clone(), symbol.name.clone()))
-            .collect::<Vec<_>>();
-        cache.files.insert(
-            rel.clone(),
-            CacheEntry {
-                size,
-                mtime_secs,
-                symbols: symbols.clone(),
-                symbol_defs: symbol_defs.clone(),
-                imports: imports.clone(),
-                token_lines: token_lines.clone(),
-            },
-        );
-        cache_dirty = true;
-
-        out.push(FileScan {
-            path: rel.clone(),
-            size,
-            symbols,
-            symbol_defs,
-            imports,
-            token_lines,
-            mtime_secs,
-        });
+        accumulator.ingest(rel, &metadata, &bytes);
         on_progress(idx + 1, total_files);
     }
-
-    let original_cache_len = cache.files.len();
-    cache.files.retain(|path, _| seen.contains(path));
-    cache_dirty |= cache.files.len() != original_cache_len;
-    if cache_dirty {
-        write_scan_cache(root, &cache);
-    }
-
-    out.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(out)
+    Ok(accumulator.finish())
 }
 
 fn discover_source_paths(root: &Path, include_tests: bool) -> Result<Vec<String>, CovyError> {
@@ -139,11 +177,10 @@ fn discover_source_paths(root: &Path, include_tests: bool) -> Result<Vec<String>
             continue;
         }
 
-        let rel = path
-            .strip_prefix(root)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .replace('\\', "/");
+        let relative = path.strip_prefix(root).unwrap_or(path);
+        let Some(rel) = normalized_utf8_repository_path(relative) else {
+            continue;
+        };
         if !include_tests && is_test_path(&rel) {
             continue;
         }
@@ -153,23 +190,26 @@ fn discover_source_paths(root: &Path, include_tests: bool) -> Result<Vec<String>
     Ok(out)
 }
 
-pub(crate) fn scan_cache_path(root: &Path) -> PathBuf {
-    root.join(MAP_CACHE_DIR).join(MAP_CACHE_FILE)
-}
-
 pub(crate) fn load_scan_cache(root: &Path) -> RepoScanCache {
-    let path = scan_cache_path(root);
-    let raw = if let Ok(raw) = std::fs::read(&path) {
-        raw
-    } else {
-        let legacy_path = root.join(MAP_CACHE_DIR).join(MAP_CACHE_FILE_LEGACY);
-        let Ok(raw) = std::fs::read(legacy_path) else {
+    let Ok(directory) = StateDir::open(root, &[MAP_CACHE_DIR], false) else {
+        return empty_cache();
+    };
+    let raw = match directory.read_bounded(MAP_CACHE_FILE, MAX_REPO_SCAN_CACHE_BYTES) {
+        Ok(Some(raw)) => raw,
+        Ok(None) => {
+            let Ok(Some(raw)) =
+                directory.read_bounded(MAP_CACHE_FILE_LEGACY, MAX_REPO_SCAN_CACHE_BYTES)
+            else {
+                return empty_cache();
+            };
+            raw
+        }
+        Err(_) => {
             return empty_cache();
-        };
-        raw
+        }
     };
 
-    let cache = if let Ok(cache) = bincode::deserialize::<RepoScanCache>(&raw) {
+    let cache = if let Ok(cache) = wincode::deserialize::<RepoScanCache>(&raw) {
         cache
     } else if let Ok(cache) = serde_json::from_slice::<RepoScanCache>(&raw) {
         cache
@@ -185,18 +225,13 @@ pub(crate) fn load_scan_cache(root: &Path) -> RepoScanCache {
 }
 
 pub(crate) fn write_scan_cache(root: &Path, cache: &RepoScanCache) {
-    let path = scan_cache_path(root);
-    if let Some(parent) = path.parent() {
-        if std::fs::create_dir_all(parent).is_err() {
-            return;
-        }
-    }
-
-    let Ok(encoded) = bincode::serialize(cache) else {
+    let Ok(encoded) = wincode::serialize(cache) else {
         return;
     };
-
-    let _ = std::fs::write(path, encoded);
+    let Ok(directory) = StateDir::open(root, &[MAP_CACHE_DIR], true) else {
+        return;
+    };
+    let _ = directory.write_atomic(MAP_CACHE_FILE, &encoded);
 }
 
 pub(crate) fn empty_cache() -> RepoScanCache {
@@ -215,8 +250,27 @@ pub(crate) fn metadata_mtime_secs(metadata: &Metadata) -> u64 {
         .unwrap_or(0)
 }
 
+pub(crate) fn metadata_mtime_unix_nanos(metadata: &Metadata) -> Option<i128> {
+    metadata.modified().ok().map(system_time_unix_nanos)
+}
+
+pub(crate) fn system_time_unix_nanos(time: SystemTime) -> i128 {
+    match time.duration_since(UNIX_EPOCH) {
+        Ok(duration) => i128::try_from(duration.as_nanos()).unwrap_or(i128::MAX),
+        Err(error) => -i128::try_from(error.duration().as_nanos()).unwrap_or(i128::MAX),
+    }
+}
+
+pub(crate) fn content_fingerprint(content: &str) -> String {
+    suite_packet_core::canonical_hash_json(&content)
+}
+
 pub(crate) fn is_source_file(path: &Path) -> bool {
     detect_source_language(&path.to_string_lossy()).is_some()
+}
+
+pub(crate) fn normalized_utf8_repository_path(path: &Path) -> Option<String> {
+    path.to_str().map(|path| path.replace('\\', "/"))
 }
 
 pub(crate) fn is_generated_or_vendor_path(path: &str) -> bool {
@@ -383,4 +437,96 @@ pub(crate) fn extract_token_lines(
         }
     }
     lines_by_token
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_cache_write_rejects_a_symlinked_parent_without_touching_the_victim() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = tempfile::tempdir().unwrap();
+        let sentinel = victim.path().join("sentinel");
+        std::fs::write(&sentinel, b"outside-must-survive").unwrap();
+        std::os::unix::fs::symlink(victim.path(), dir.path().join(MAP_CACHE_DIR)).unwrap();
+
+        write_scan_cache(dir.path(), &empty_cache());
+
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"outside-must-survive");
+        assert!(!victim.path().join(MAP_CACHE_FILE).exists());
+    }
+
+    #[test]
+    fn scan_cache_rejects_an_oversized_sparse_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = StateDir::open(dir.path(), &[MAP_CACHE_DIR], true).unwrap();
+        let path = state.path().join(MAP_CACHE_FILE);
+        let file = std::fs::File::create(path).unwrap();
+        file.set_len(MAX_REPO_SCAN_CACHE_BYTES + 1).unwrap();
+
+        let loaded = load_scan_cache(dir.path());
+
+        assert_eq!(loaded.version, MAP_CACHE_VERSION);
+        assert!(loaded.files.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn utf8_repository_path_normalization_is_lossless_or_rejected() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let mut invalid_name = b"collision_".to_vec();
+        invalid_name.push(0xff);
+        invalid_name.extend_from_slice(b".rs");
+        let invalid = Path::new("src").join(OsString::from_vec(invalid_name));
+
+        assert_eq!(normalized_utf8_repository_path(&invalid), None);
+        assert_eq!(
+            normalized_utf8_repository_path(Path::new("src/collision_\u{fffd}.rs")).as_deref(),
+            Some("src/collision_\u{fffd}.rs")
+        );
+    }
+
+    // APFS rejects creation of the invalid-byte fixture with EPERM, while
+    // Linux filesystems preserve the byte name. The pure Unix test above still
+    // verifies the macOS eligibility boundary.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn scan_skips_non_utf8_paths_even_when_the_lossy_name_exists() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+
+        let mut invalid_name = b"collision_".to_vec();
+        invalid_name.push(0xff);
+        invalid_name.extend_from_slice(b".rs");
+        std::fs::write(
+            root.join("src").join(OsString::from_vec(invalid_name)),
+            "pub fn non_utf8_filename_symbol() {}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/collision_\u{fffd}.rs"),
+            "pub fn utf8_replacement_filename_symbol() {}\n",
+        )
+        .unwrap();
+
+        let scans = scan_repo(root, true).unwrap();
+        assert_eq!(scans.len(), 1);
+        assert_eq!(scans[0].path, "src/collision_\u{fffd}.rs");
+        assert!(scans[0]
+            .symbols
+            .iter()
+            .any(|(_, name)| name == "utf8_replacement_filename_symbol"));
+        assert!(scans[0]
+            .symbols
+            .iter()
+            .all(|(_, name)| name != "non_utf8_filename_symbol"));
+    }
 }

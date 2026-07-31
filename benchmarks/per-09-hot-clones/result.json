@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "benchmark": "packet28d budget pruning clone elision",
+  "iterations": 128,
+  "fixture_sections": 32,
+  "body_bytes_per_section": 32768,
+  "fixture_body_bytes": 1048576,
+  "baseline": {
+    "operation": "clone owned section vector, then prune",
+    "aggregate_nanos": 18219921
+  },
+  "selected": {
+    "operation": "move owned section vector directly into prune",
+    "aggregate_nanos": 9981125
+  },
+  "delta": {
+    "nanos": -8238796,
+    "percent": -45.2186,
+    "speedup": 1.8254
+  },
+  "behavior_parity_asserted": true
+}

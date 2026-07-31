@@ -1,9 +1,12 @@
 use std::path::Path;
+use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 
 use crate::cmd_context::{build_kernel, AssembleArgs, CorrelateArgs, ManageArgs};
+
+const CONTEXT_PERSISTENCE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn run_assemble(args: AssembleArgs) -> Result<i32> {
     let profile = args
@@ -23,7 +26,8 @@ pub fn run_assemble(args: AssembleArgs) -> Result<i32> {
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let cwd = std::env::current_dir()?;
-    let kernel = build_kernel(args.cache || args.task_id.is_some(), cwd.clone());
+    let persistence_enabled = args.cache || args.task_id.is_some();
+    let kernel = build_kernel(persistence_enabled, cwd.clone());
     let target = if args.context_config.is_some() {
         "governed.assemble"
     } else {
@@ -54,6 +58,16 @@ pub fn run_assemble(args: AssembleArgs) -> Result<i32> {
         },
         ..context_kernel_core::KernelRequest::default()
     })?;
+    if persistence_enabled {
+        kernel
+            .shutdown_cache_persistence(CONTEXT_PERSISTENCE_TIMEOUT)
+            .with_context(|| {
+                format!(
+                    "failed to durably finish context assembly under '{}'",
+                    cwd.display()
+                )
+            })?;
+    }
 
     let assembled = response
         .output_packets
@@ -451,7 +465,7 @@ pub fn run_correlate(args: CorrelateArgs) -> Result<i32> {
         .map(suite_packet_core::JsonProfile::from)
         .unwrap_or(suite_packet_core::JsonProfile::Compact);
     let cwd = std::env::current_dir()?;
-    let kernel = build_kernel(true, cwd.clone());
+    let kernel = build_kernel(true, cwd);
     let input_packets = args
         .packets
         .iter()

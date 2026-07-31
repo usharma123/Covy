@@ -1,0 +1,3512 @@
+{
+  "assertions": [
+    {
+      "detail": "expected_hits=[false, false, false, false, false, false] actual_hits=[false, false, false, false, false, false] expected_eligible=false actual_eligible=[false, false, false, false, false, false]",
+      "name": "passthrough_r1_local_cache_pattern",
+      "passed": true
+    },
+    {
+      "detail": "source and rendered hashes must match for all six transitions",
+      "name": "passthrough_r1_exact_source_bytes",
+      "passed": true
+    },
+    {
+      "detail": "expected_hits=[false, true, true, true, true, false] actual_hits=[false, true, true, true, true, false] expected_eligible=true actual_eligible=[true, true, true, true, true, true]",
+      "name": "stable_r1_local_cache_pattern",
+      "passed": true
+    },
+    {
+      "detail": "unique_rendered_prefix_hashes=1",
+      "name": "stable_r1_byte_identity",
+      "passed": true
+    },
+    {
+      "detail": "expected_hits=[false, false, false, false, false, false] actual_hits=[false, false, false, false, false, false] expected_eligible=false actual_eligible=[false, false, false, false, false, false]",
+      "name": "adaptive_r1_local_cache_pattern",
+      "passed": true
+    },
+    {
+      "detail": "compaction without render-relevant drift stays fixed; task A\u2192B and same-task snapshot drift change bytes; a fresh worker reproduces the latest snapshot bytes",
+      "name": "adaptive_r1_transition_identity",
+      "passed": true
+    },
+    {
+      "detail": "expected_hits=[false, false, false, false, false, false] actual_hits=[false, false, false, false, false, false] expected_eligible=false actual_eligible=[false, false, false, false, false, false]",
+      "name": "passthrough_r2_local_cache_pattern",
+      "passed": true
+    },
+    {
+      "detail": "source and rendered hashes must match for all six transitions",
+      "name": "passthrough_r2_exact_source_bytes",
+      "passed": true
+    },
+    {
+      "detail": "expected_hits=[false, true, true, true, true, false] actual_hits=[false, true, true, true, true, false] expected_eligible=true actual_eligible=[true, true, true, true, true, true]",
+      "name": "stable_r2_local_cache_pattern",
+      "passed": true
+    },
+    {
+      "detail": "unique_rendered_prefix_hashes=1",
+      "name": "stable_r2_byte_identity",
+      "passed": true
+    },
+    {
+      "detail": "expected_hits=[false, false, false, false, false, false] actual_hits=[false, false, false, false, false, false] expected_eligible=false actual_eligible=[false, false, false, false, false, false]",
+      "name": "adaptive_r2_local_cache_pattern",
+      "passed": true
+    },
+    {
+      "detail": "compaction without render-relevant drift stays fixed; task A\u2192B and same-task snapshot drift change bytes; a fresh worker reproduces the latest snapshot bytes",
+      "name": "adaptive_r2_transition_identity",
+      "passed": true
+    },
+    {
+      "detail": "expected_hits=[false, false, false, false, false, false] actual_hits=[false, false, false, false, false, false] expected_eligible=false actual_eligible=[false, false, false, false, false, false]",
+      "name": "passthrough_r3_local_cache_pattern",
+      "passed": true
+    },
+    {
+      "detail": "source and rendered hashes must match for all six transitions",
+      "name": "passthrough_r3_exact_source_bytes",
+      "passed": true
+    },
+    {
+      "detail": "expected_hits=[false, true, true, true, true, false] actual_hits=[false, true, true, true, true, false] expected_eligible=true actual_eligible=[true, true, true, true, true, true]",
+      "name": "stable_r3_local_cache_pattern",
+      "passed": true
+    },
+    {
+      "detail": "unique_rendered_prefix_hashes=1",
+      "name": "stable_r3_byte_identity",
+      "passed": true
+    },
+    {
+      "detail": "expected_hits=[false, false, false, false, false, false] actual_hits=[false, false, false, false, false, false] expected_eligible=false actual_eligible=[false, false, false, false, false, false]",
+      "name": "adaptive_r3_local_cache_pattern",
+      "passed": true
+    },
+    {
+      "detail": "compaction without render-relevant drift stays fixed; task A\u2192B and same-task snapshot drift change bytes; a fresh worker reproduces the latest snapshot bytes",
+      "name": "adaptive_r3_transition_identity",
+      "passed": true
+    },
+    {
+      "detail": "unique_rendered_prefix_hashes=1",
+      "name": "stable_prefix_is_byte_identical_across_all_repetitions",
+      "passed": true
+    }
+  ],
+  "evidence_boundary": "Local renderer/cache observations only. No provider request was made; provider prompt ordering, cache boundaries, creation/read tokens, costs, compaction rewarm, adherence, and net savings remain explicitly unknown.",
+  "experiment_id": "instruction-prefix-20260728",
+  "fixture_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+  "manifest_sha256": "427a448ef63e70d84d97851225ebe0fc4dc94cd7ccdd135fe219099fb01070bc",
+  "ok": true,
+  "provider_metrics_by_mode": {
+    "adaptive": {
+      "churn_rate": {
+        "reason": "provider cache creation/read token observations are incomplete",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "compaction rewarm tokens are incomplete",
+        "state": "unknown"
+      },
+      "effective_cache_cost_usd": {
+        "reason": "provider cache creation/read cost observations are incomplete",
+        "state": "unknown"
+      },
+      "reuse_multiple": {
+        "reason": "provider cache creation/read token observations are incomplete",
+        "state": "unknown"
+      }
+    },
+    "passthrough": {
+      "churn_rate": {
+        "reason": "provider cache creation/read token observations are incomplete",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "compaction rewarm tokens are incomplete",
+        "state": "unknown"
+      },
+      "effective_cache_cost_usd": {
+        "reason": "provider cache creation/read cost observations are incomplete",
+        "state": "unknown"
+      },
+      "reuse_multiple": {
+        "reason": "provider cache creation/read token observations are incomplete",
+        "state": "unknown"
+      }
+    },
+    "stable": {
+      "churn_rate": {
+        "reason": "provider cache creation/read token observations are incomplete",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "compaction rewarm tokens are incomplete",
+        "state": "unknown"
+      },
+      "effective_cache_cost_usd": {
+        "reason": "provider cache creation/read cost observations are incomplete",
+        "state": "unknown"
+      },
+      "reuse_multiple": {
+        "reason": "provider cache creation/read token observations are incomplete",
+        "state": "unknown"
+      }
+    }
+  },
+  "records": [
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 0,
+      "run_id": "instruction-prefix-20260728-passthrough-r1",
+      "scenario": "cold_start",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 1,
+      "run_id": "instruction-prefix-20260728-passthrough-r1",
+      "scenario": "second_request",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 2,
+      "run_id": "instruction-prefix-20260728-passthrough-r1",
+      "scenario": "compaction",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 3,
+      "run_id": "instruction-prefix-20260728-passthrough-r1",
+      "scenario": "task_switch",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 4,
+      "run_id": "instruction-prefix-20260728-passthrough-r1",
+      "scenario": "snapshot_drift",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 5,
+      "run_id": "instruction-prefix-20260728-passthrough-r1",
+      "scenario": "fresh_worker_handoff",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": false,
+      "request_index": 0,
+      "run_id": "instruction-prefix-20260728-stable-r1",
+      "scenario": "cold_start",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": true,
+      "request_index": 1,
+      "run_id": "instruction-prefix-20260728-stable-r1",
+      "scenario": "second_request",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": true,
+      "request_index": 2,
+      "run_id": "instruction-prefix-20260728-stable-r1",
+      "scenario": "compaction",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": true,
+      "request_index": 3,
+      "run_id": "instruction-prefix-20260728-stable-r1",
+      "scenario": "task_switch",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": true,
+      "request_index": 4,
+      "run_id": "instruction-prefix-20260728-stable-r1",
+      "scenario": "snapshot_drift",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": false,
+      "request_index": 5,
+      "run_id": "instruction-prefix-20260728-stable-r1",
+      "scenario": "fresh_worker_handoff",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 833,
+      "local_prefix_est_tokens": 209,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "889304005fd49260a70a86dfff9d1764c6512478228e1a8a62b99ac6bf0abcd4",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 0,
+      "run_id": "instruction-prefix-20260728-adaptive-r1",
+      "scenario": "cold_start",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "0682ba6088dd325c12a94760bbb0ce4e201dd964fc9a478194234dce14ce5a1c"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 833,
+      "local_prefix_est_tokens": 209,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "889304005fd49260a70a86dfff9d1764c6512478228e1a8a62b99ac6bf0abcd4",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 1,
+      "run_id": "instruction-prefix-20260728-adaptive-r1",
+      "scenario": "second_request",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "0682ba6088dd325c12a94760bbb0ce4e201dd964fc9a478194234dce14ce5a1c"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 833,
+      "local_prefix_est_tokens": 209,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "889304005fd49260a70a86dfff9d1764c6512478228e1a8a62b99ac6bf0abcd4",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 2,
+      "run_id": "instruction-prefix-20260728-adaptive-r1",
+      "scenario": "compaction",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "0682ba6088dd325c12a94760bbb0ce4e201dd964fc9a478194234dce14ce5a1c"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 834,
+      "local_prefix_est_tokens": 209,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "1eae3fa9c039b6eeb2553cce1f86d5945c28298cb37ab01f943dffd37dbc6b58",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 3,
+      "run_id": "instruction-prefix-20260728-adaptive-r1",
+      "scenario": "task_switch",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "81ee5940b1318a821a96ac5e87d6544108e240e636db1ef14e69c1449547a408"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 863,
+      "local_prefix_est_tokens": 216,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "c2a2a898d81adcfb9bffb2b5ffb1394abffaa42dba59a0d788487fae798284db",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 4,
+      "run_id": "instruction-prefix-20260728-adaptive-r1",
+      "scenario": "snapshot_drift",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "5be2af4100f80fe96fe2b8d9b5c262412b185ecac5b7998c75fab8fbc0df3b9c"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 863,
+      "local_prefix_est_tokens": 216,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "c2a2a898d81adcfb9bffb2b5ffb1394abffaa42dba59a0d788487fae798284db",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 5,
+      "run_id": "instruction-prefix-20260728-adaptive-r1",
+      "scenario": "fresh_worker_handoff",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "5be2af4100f80fe96fe2b8d9b5c262412b185ecac5b7998c75fab8fbc0df3b9c"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 0,
+      "run_id": "instruction-prefix-20260728-passthrough-r2",
+      "scenario": "cold_start",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 1,
+      "run_id": "instruction-prefix-20260728-passthrough-r2",
+      "scenario": "second_request",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 2,
+      "run_id": "instruction-prefix-20260728-passthrough-r2",
+      "scenario": "compaction",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 3,
+      "run_id": "instruction-prefix-20260728-passthrough-r2",
+      "scenario": "task_switch",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 4,
+      "run_id": "instruction-prefix-20260728-passthrough-r2",
+      "scenario": "snapshot_drift",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 5,
+      "run_id": "instruction-prefix-20260728-passthrough-r2",
+      "scenario": "fresh_worker_handoff",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": false,
+      "request_index": 0,
+      "run_id": "instruction-prefix-20260728-stable-r2",
+      "scenario": "cold_start",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": true,
+      "request_index": 1,
+      "run_id": "instruction-prefix-20260728-stable-r2",
+      "scenario": "second_request",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": true,
+      "request_index": 2,
+      "run_id": "instruction-prefix-20260728-stable-r2",
+      "scenario": "compaction",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": true,
+      "request_index": 3,
+      "run_id": "instruction-prefix-20260728-stable-r2",
+      "scenario": "task_switch",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": true,
+      "request_index": 4,
+      "run_id": "instruction-prefix-20260728-stable-r2",
+      "scenario": "snapshot_drift",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": false,
+      "request_index": 5,
+      "run_id": "instruction-prefix-20260728-stable-r2",
+      "scenario": "fresh_worker_handoff",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 833,
+      "local_prefix_est_tokens": 209,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "889304005fd49260a70a86dfff9d1764c6512478228e1a8a62b99ac6bf0abcd4",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 0,
+      "run_id": "instruction-prefix-20260728-adaptive-r2",
+      "scenario": "cold_start",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "0682ba6088dd325c12a94760bbb0ce4e201dd964fc9a478194234dce14ce5a1c"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 833,
+      "local_prefix_est_tokens": 209,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "889304005fd49260a70a86dfff9d1764c6512478228e1a8a62b99ac6bf0abcd4",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 1,
+      "run_id": "instruction-prefix-20260728-adaptive-r2",
+      "scenario": "second_request",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "0682ba6088dd325c12a94760bbb0ce4e201dd964fc9a478194234dce14ce5a1c"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 833,
+      "local_prefix_est_tokens": 209,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "889304005fd49260a70a86dfff9d1764c6512478228e1a8a62b99ac6bf0abcd4",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 2,
+      "run_id": "instruction-prefix-20260728-adaptive-r2",
+      "scenario": "compaction",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "0682ba6088dd325c12a94760bbb0ce4e201dd964fc9a478194234dce14ce5a1c"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 834,
+      "local_prefix_est_tokens": 209,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "1eae3fa9c039b6eeb2553cce1f86d5945c28298cb37ab01f943dffd37dbc6b58",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 3,
+      "run_id": "instruction-prefix-20260728-adaptive-r2",
+      "scenario": "task_switch",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "81ee5940b1318a821a96ac5e87d6544108e240e636db1ef14e69c1449547a408"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 863,
+      "local_prefix_est_tokens": 216,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "c2a2a898d81adcfb9bffb2b5ffb1394abffaa42dba59a0d788487fae798284db",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 4,
+      "run_id": "instruction-prefix-20260728-adaptive-r2",
+      "scenario": "snapshot_drift",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "5be2af4100f80fe96fe2b8d9b5c262412b185ecac5b7998c75fab8fbc0df3b9c"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 863,
+      "local_prefix_est_tokens": 216,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "c2a2a898d81adcfb9bffb2b5ffb1394abffaa42dba59a0d788487fae798284db",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 5,
+      "run_id": "instruction-prefix-20260728-adaptive-r2",
+      "scenario": "fresh_worker_handoff",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "5be2af4100f80fe96fe2b8d9b5c262412b185ecac5b7998c75fab8fbc0df3b9c"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 0,
+      "run_id": "instruction-prefix-20260728-passthrough-r3",
+      "scenario": "cold_start",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 1,
+      "run_id": "instruction-prefix-20260728-passthrough-r3",
+      "scenario": "second_request",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 2,
+      "run_id": "instruction-prefix-20260728-passthrough-r3",
+      "scenario": "compaction",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 3,
+      "run_id": "instruction-prefix-20260728-passthrough-r3",
+      "scenario": "task_switch",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 4,
+      "run_id": "instruction-prefix-20260728-passthrough-r3",
+      "scenario": "snapshot_drift",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 1076,
+      "local_prefix_est_tokens": 269,
+      "mode": "passthrough",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 5,
+      "run_id": "instruction-prefix-20260728-passthrough-r3",
+      "scenario": "fresh_worker_handoff",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": false,
+      "request_index": 0,
+      "run_id": "instruction-prefix-20260728-stable-r3",
+      "scenario": "cold_start",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": true,
+      "request_index": 1,
+      "run_id": "instruction-prefix-20260728-stable-r3",
+      "scenario": "second_request",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": true,
+      "request_index": 2,
+      "run_id": "instruction-prefix-20260728-stable-r3",
+      "scenario": "compaction",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": true,
+      "request_index": 3,
+      "run_id": "instruction-prefix-20260728-stable-r3",
+      "scenario": "task_switch",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": true,
+      "request_index": 4,
+      "run_id": "instruction-prefix-20260728-stable-r3",
+      "scenario": "snapshot_drift",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 765,
+      "local_prefix_est_tokens": 192,
+      "mode": "stable",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "cba3f2d2376fa0bb681ee5563a4cfc101b24e13843e9f53305ec30f36a733097",
+      "renderer_cache_eligible": true,
+      "renderer_cache_hit": false,
+      "request_index": 5,
+      "run_id": "instruction-prefix-20260728-stable-r3",
+      "scenario": "fresh_worker_handoff",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "reason": "snapshot identity is inapplicable outside adaptive mode",
+        "state": "unknown"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 833,
+      "local_prefix_est_tokens": 209,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "889304005fd49260a70a86dfff9d1764c6512478228e1a8a62b99ac6bf0abcd4",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 0,
+      "run_id": "instruction-prefix-20260728-adaptive-r3",
+      "scenario": "cold_start",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "0682ba6088dd325c12a94760bbb0ce4e201dd964fc9a478194234dce14ce5a1c"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 833,
+      "local_prefix_est_tokens": 209,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "889304005fd49260a70a86dfff9d1764c6512478228e1a8a62b99ac6bf0abcd4",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 1,
+      "run_id": "instruction-prefix-20260728-adaptive-r3",
+      "scenario": "second_request",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "0682ba6088dd325c12a94760bbb0ce4e201dd964fc9a478194234dce14ce5a1c"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 833,
+      "local_prefix_est_tokens": 209,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "889304005fd49260a70a86dfff9d1764c6512478228e1a8a62b99ac6bf0abcd4",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 2,
+      "run_id": "instruction-prefix-20260728-adaptive-r3",
+      "scenario": "compaction",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "0682ba6088dd325c12a94760bbb0ce4e201dd964fc9a478194234dce14ce5a1c"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 834,
+      "local_prefix_est_tokens": 209,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "1eae3fa9c039b6eeb2553cce1f86d5945c28298cb37ab01f943dffd37dbc6b58",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 3,
+      "run_id": "instruction-prefix-20260728-adaptive-r3",
+      "scenario": "task_switch",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "81ee5940b1318a821a96ac5e87d6544108e240e636db1ef14e69c1449547a408"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 863,
+      "local_prefix_est_tokens": 216,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "c2a2a898d81adcfb9bffb2b5ffb1394abffaa42dba59a0d788487fae798284db",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 4,
+      "run_id": "instruction-prefix-20260728-adaptive-r3",
+      "scenario": "snapshot_drift",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "5be2af4100f80fe96fe2b8d9b5c262412b185ecac5b7998c75fab8fbc0df3b9c"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    },
+    {
+      "cache_creation_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_creation_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_cost_usd": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "cache_read_tokens": {
+        "reason": "provider cache creation/read telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "compaction_rewarm_tokens": {
+        "reason": "provider compaction rewarm telemetry was not available in the local run",
+        "state": "unknown"
+      },
+      "instruction_adherence": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "instruction_adherence_method": {
+        "reason": "instruction adherence requires a provider response and was not measured locally",
+        "state": "unknown"
+      },
+      "local_prefix_bytes": 863,
+      "local_prefix_est_tokens": 216,
+      "mode": "adaptive",
+      "provider": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "provider_cache_boundary": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_prompt_order": {
+        "reason": "provider prompt assembly and cache breakpoint metadata were not observed",
+        "state": "unknown"
+      },
+      "provider_version": {
+        "reason": "local renderer-only experiment; no provider request was made",
+        "state": "unknown"
+      },
+      "rendered_prefix_sha256": "c2a2a898d81adcfb9bffb2b5ffb1394abffaa42dba59a0d788487fae798284db",
+      "renderer_cache_eligible": false,
+      "renderer_cache_hit": false,
+      "request_index": 5,
+      "run_id": "instruction-prefix-20260728-adaptive-r3",
+      "scenario": "fresh_worker_handoff",
+      "schema": "packet28.instruction_cache_experiment.v1",
+      "snapshot_sha256": {
+        "state": "observed",
+        "value": "5be2af4100f80fe96fe2b8d9b5c262412b185ecac5b7998c75fab8fbc0df3b9c"
+      },
+      "source_sha256": "f124e53b9138466617db09e7d01362b4b9863185c0438e087986bde2b393570f",
+      "stable_config_sha256": "25912f2daa1f556b79a165b279e1422b04138c5f650b9ea0084ed2a6a832676b"
+    }
+  ],
+  "schema": "packet28.instruction_prefix_local_experiment.v1",
+  "telemetry_schema": "packet28.instruction_cache_experiment.v1"
+}

@@ -1,0 +1,253 @@
+{
+  "schema": "packet28.per06.production-shared-scan.v1",
+  "audit_item": "PER-06",
+  "measured_at_unix_seconds": 1785291351,
+  "profile": "release",
+  "command": [
+    "benchmarks/per-06-shared-scan/target/release/production",
+    "--iterations",
+    "6",
+    "--output",
+    "benchmarks/per-06-shared-scan/production-result.json"
+  ],
+  "source": {
+    "git_head": "c65a5dcbfdeaa79a115f7e8361aada7bbba1d97a",
+    "worktree_clean": true,
+    "status_porcelain": [],
+    "files_blake3": {
+      "benchmarks/per-06-shared-scan/Cargo.lock": "a98fb169b62d3c79d1ec546c6141d5f9f4731a5a336654f12e7f2bd44a1c5f05",
+      "benchmarks/per-06-shared-scan/Cargo.toml": "15f5450e4747ded6dd4084ccf90ce09d0208996fb0276b0c4c87689e5c0025f3",
+      "benchmarks/per-06-shared-scan/src/bin/production.rs": "3869496dee6d66f71d27e62f5d82b9e733bd8f80673dee516c3b825a9dc466ca",
+      "crates/mapy-core/Cargo.toml": "96120f473518ae51c84b9ba0c0996d73c31258fd6b67bb5131e77953f6e612a6",
+      "crates/mapy-core/src/generation.rs": "ed29ed84457393ab389406a6e9a4fe6e6561efc45666a18db75ef02619befb11",
+      "crates/mapy-core/src/scan.rs": "8bd52f72c77c5cfdd2a1a36bdb5a8ac1a84650a339bb18f59304de36912a2725",
+      "crates/mapy-core/src/shared_scan.rs": "772e16147681a488b193ed2f0fb9405a916269913fbae71ef042ec28c924e082",
+      "crates/packet28-search-core/Cargo.toml": "e8ed701588db2bdf9abb5f3e4f678e0992fc17d52e02d18e8cec142e506655d9",
+      "crates/packet28-search-core/src/lib.rs": "802be7245360534080e4fd5ceaca14de9da0e70e5c10fa4e035f78db51e32efa",
+      "crates/packet28-search-core/src/shared_scan.rs": "49264932a983fe70e762ab8ef490ecae72b2f30c4db3c1d11dd3d649b5c22d8d",
+      "crates/packet28d/Cargo.toml": "74507d4c04da601791139a5bd2cfaddc6120831bfb494672cb09a18506d4bef1",
+      "crates/packet28d/src/shared_repository_scan.rs": "91f7a58d5da98ce29018b76692192b28092e3d2988074d9e90c82e21826ea101"
+    }
+  },
+  "toolchain": {
+    "rustc": "rustc 1.93.0 (254b59607 2026-01-19) (Homebrew)\nbinary: rustc\ncommit-hash: 254b59607d4417e9dffbc307138ae5c86280fe4c\ncommit-date: 2026-01-19\nhost: aarch64-apple-darwin\nrelease: 1.93.0\nLLVM version: 21.1.8",
+    "cargo": "cargo 1.93.0 (Homebrew)",
+    "target": "aarch64-macos"
+  },
+  "host": {
+    "uname": "Darwin Mac 24.6.0 Darwin Kernel Version 24.6.0: Wed Oct  8 21:15:02 PDT 2025; root:xnu-11417.140.69.703.11~1/RELEASE_ARM64_T6041 arm64",
+    "cpu_model": "Apple M4 Pro",
+    "memory_bytes": 24000000000,
+    "available_parallelism": 14
+  },
+  "method": {
+    "iterations": 6,
+    "warmup": "one unmeasured direct-standard, instrumented-separate, and shared build per fixture",
+    "separate_baseline": "instrumented counterfactual: the two standalone discovery policies and feature-gated builder/publication sessions; an untimed direct-standard build proves output parity before measurement",
+    "fixture_roots": "each strategy receives an independently materialized byte- and mtime-identical root",
+    "cache_state": "new roots are materialized immediately before each timed build; recently written data may be in the host page cache",
+    "order_control": "balanced AB/BA pairs alternate separate-first and shared-first across an even iteration count",
+    "timed_scope": "discovery, repository-content input, parsing/gram construction, immutable artifact preparation, each strategy's publication mechanics, and commit",
+    "io_scope": "exact application-level repository-input telemetry only: walker entries, classification/content metadata queries, successful content fs::read calls, returned bytes, and largest retained raw content buffer; excludes cache/manifest/artifact I/O and physical kernel I/O",
+    "parity": "direct-standard versus instrumented-separate parity is asserted before timing; map snapshots, regex lookup/postings/document digests, semantic policy oracles, and indexed query results are then asserted for every measured pair",
+    "content_residency_bound": "both strategies retain at most one raw content buffer; the shared strategy lends it to both builders; runtimes and fixture roots are dropped after each pair"
+  },
+  "decision": {
+    "state": "keep_non_default_feature_gate",
+    "reason": [
+      "production parity is demonstrated on controlled fixtures, not every filesystem and platform",
+      "the measured release results are machine-local and recently-written-cache observations",
+      "default enablement should follow Linux parity and field telemetry from opt-in daemon runs"
+    ]
+  },
+  "fixtures": [
+    {
+      "fixture": {
+        "name": "small-files",
+        "filesystem_entries_written": 410,
+        "bytes_written": 2130138
+      },
+      "direct_standard_parity_asserted_before_measurement": true,
+      "semantic_oracles_asserted": true,
+      "parity_asserted_every_iteration": true,
+      "output": {
+        "map_snapshot": "24380898c3a5cb5371909bf8a021e99541cfb2f925d0fdea7b03b75281ba10c0",
+        "regex": {
+          "lookup": "323be31acaff10d1ff549dfdd6991f9e4814c86f9239261dc50cae1560b96bfb",
+          "postings": "fd91914968ca8cf6b13599c46b5edb004055920f8766143d67cc789993413ff7",
+          "documents": "1bef731f40ae69a8ae2ab787155ca07927cea46cf55e72274a369e170387fbc2"
+        },
+        "query_results": "4def6a706c9c91b11d6e529f34f1af10726e1e8cafeed40ae52f58385d2bb3a3"
+      },
+      "separate": {
+        "operation": "instrumented two-pass counterfactual preserving standalone discovery policies and engine builders/publication",
+        "repository_input_io_per_iteration": {
+          "walk_passes": 2,
+          "walked_entries": 836,
+          "ignored_walk_errors": 0,
+          "classification_metadata_queries": 836,
+          "content_metadata_calls": 734,
+          "successful_read_calls": 734,
+          "bytes_read": 3612932,
+          "peak_retained_content_files": 1,
+          "peak_retained_content_bytes": 8192
+        },
+        "repository_input_io_stable_across_iterations": true,
+        "median_elapsed_nanos": 844991854,
+        "raw_elapsed_nanos": [
+          841946916,
+          826090042,
+          848036792,
+          896825709,
+          824044083,
+          858511792
+        ]
+      },
+      "shared": {
+        "operation": "production shared coordinator with one union discovery/read pass",
+        "repository_input_io_per_iteration": {
+          "walk_passes": 1,
+          "walked_entries": 415,
+          "ignored_walk_errors": 0,
+          "classification_metadata_queries": 2,
+          "content_metadata_calls": 408,
+          "successful_read_calls": 408,
+          "bytes_read": 2134171,
+          "peak_retained_content_files": 1,
+          "peak_retained_content_bytes": 8192
+        },
+        "repository_input_io_stable_across_iterations": true,
+        "median_elapsed_nanos": 829551416,
+        "raw_elapsed_nanos": [
+          857329750,
+          828725375,
+          830377458,
+          807816375,
+          832982375,
+          825296709
+        ]
+      },
+      "input_io_delta": {
+        "walk_passes": -1,
+        "classification_metadata_queries": -834,
+        "content_metadata_calls": -326,
+        "successful_read_calls": -326,
+        "bytes_read": -1478761,
+        "peak_retained_content_bytes": 0
+      },
+      "paired_timing": {
+        "order": [
+          "separate_then_shared",
+          "shared_then_separate",
+          "separate_then_shared",
+          "shared_then_separate",
+          "separate_then_shared",
+          "shared_then_separate"
+        ],
+        "elapsed_basis_points": [
+          182,
+          31,
+          -208,
+          -992,
+          108,
+          -386
+        ],
+        "median_elapsed_basis_points": -88
+      }
+    },
+    {
+      "fixture": {
+        "name": "large-files",
+        "filesystem_entries_written": 91,
+        "bytes_written": 63963354
+      },
+      "direct_standard_parity_asserted_before_measurement": true,
+      "semantic_oracles_asserted": true,
+      "parity_asserted_every_iteration": true,
+      "output": {
+        "map_snapshot": "96e9e46e37ec0c9210477fb78f428eed97461d3734c8a6d8ded47ffd48728097",
+        "regex": {
+          "lookup": "4b6c4da06dcd227bbb98cbbeb6554958a6a9bb42a2d50486c975f34d2e56ae1c",
+          "postings": "886b6fd5d1fe6c09fda9da0b256356753ded2f2367bff4199498352e2e2ddaef",
+          "documents": "8b2664c2a1e066ca7b6b7ed046b21747064790c3079a46858330dd085a149ffe"
+        },
+        "query_results": "2dad742502c1b28a4be954dbb9011eade86fe32a17dd0eb875eb9952584261ab"
+      },
+      "separate": {
+        "operation": "instrumented two-pass counterfactual preserving standalone discovery policies and engine builders/publication",
+        "repository_input_io_per_iteration": {
+          "walk_passes": 2,
+          "walked_entries": 198,
+          "ignored_walk_errors": 0,
+          "classification_metadata_queries": 198,
+          "content_metadata_calls": 148,
+          "successful_read_calls": 140,
+          "bytes_read": 71827716,
+          "peak_retained_content_files": 1,
+          "peak_retained_content_bytes": 2621440
+        },
+        "repository_input_io_stable_across_iterations": true,
+        "median_elapsed_nanos": 11662904750,
+        "raw_elapsed_nanos": [
+          11648622042,
+          11466314792,
+          11907290250,
+          12006199250,
+          11575166209,
+          11677187458
+        ]
+      },
+      "shared": {
+        "operation": "production shared coordinator with one union discovery/read pass",
+        "repository_input_io_per_iteration": {
+          "walk_passes": 1,
+          "walked_entries": 96,
+          "ignored_walk_errors": 0,
+          "classification_metadata_queries": 2,
+          "content_metadata_calls": 89,
+          "successful_read_calls": 85,
+          "bytes_read": 53739675,
+          "peak_retained_content_files": 1,
+          "peak_retained_content_bytes": 2621440
+        },
+        "repository_input_io_stable_across_iterations": true,
+        "median_elapsed_nanos": 11735124396,
+        "raw_elapsed_nanos": [
+          11735506584,
+          11734742209,
+          11479502583,
+          12007232250,
+          11707430708,
+          12004948084
+        ]
+      },
+      "input_io_delta": {
+        "walk_passes": -1,
+        "classification_metadata_queries": -196,
+        "content_metadata_calls": -59,
+        "successful_read_calls": -55,
+        "bytes_read": -18088041,
+        "peak_retained_content_bytes": 0
+      },
+      "paired_timing": {
+        "order": [
+          "separate_then_shared",
+          "shared_then_separate",
+          "separate_then_shared",
+          "shared_then_separate",
+          "separate_then_shared",
+          "shared_then_separate"
+        ],
+        "elapsed_basis_points": [
+          74,
+          234,
+          -359,
+          0,
+          114,
+          280
+        ],
+        "median_elapsed_basis_points": 94
+      }
+    }
+  ]
+}

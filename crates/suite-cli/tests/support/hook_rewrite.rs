@@ -1,23 +1,18 @@
 use assert_cmd::Command;
 use std::fs;
-use std::io::Write;
 use std::path::Path;
-use std::process::Stdio;
-use std::sync::OnceLock;
+use std::time::Duration;
+
+use crate::process_harness::{HarnessLimits, ProcessHarness};
+
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub fn suite_cmd() -> Command {
     assert_cmd::cargo::cargo_bin_cmd!("Packet28")
 }
 
 pub fn ensure_packet28d_built() {
-    static BUILT: OnceLock<()> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        let status = std::process::Command::new("cargo")
-            .args(["build", "-p", "packet28d"])
-            .status()
-            .unwrap();
-        assert!(status.success(), "failed to build packet28d");
-    });
+    crate::process_harness::ensure_packet28d_built();
 }
 
 pub fn write_repo_fixture(root: &Path) {
@@ -46,12 +41,7 @@ enum Beta {
 }
 
 fn git(root: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {:?} failed with {status}", args);
+    crate::process_harness::run_git(root, args);
 }
 
 pub fn init_repo(root: &Path) {
@@ -59,21 +49,17 @@ pub fn init_repo(root: &Path) {
 }
 
 pub fn run_hook_raw(runtime: &str, root: &Path, stdin_payload: &str) -> (i32, String, String) {
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"))
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"));
+    command
         .current_dir(root)
-        .args(["hook", runtime, "--root", root.to_str().unwrap()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(stdin_payload.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
+        .args(["hook", runtime, "--root", root.to_str().unwrap()]);
+    let output = ProcessHarness::run(
+        &mut command,
+        stdin_payload.as_bytes(),
+        COMMAND_TIMEOUT,
+        HarnessLimits::default(),
+    )
+    .unwrap_or_else(|error| panic!("{runtime} hook process failed: {error}"));
     (
         output.status.code().unwrap_or(1),
         String::from_utf8_lossy(&output.stdout).to_string(),

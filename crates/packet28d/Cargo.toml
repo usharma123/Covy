@@ -1,12 +1,23 @@
 [package]
 name = "packet28d"
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description.workspace = true
 repository.workspace = true
 homepage.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+shared-repository-scan = [
+  "mapy-core/shared-repository-scan",
+  "packet28-search-core/shared-repository-scan",
+]
 
 [[bin]]
 name = "packet28d"
@@ -15,24 +26,27 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-context-kernel-core = { version = "0.2.0", path = "../context-kernel-core" }
-context-memory-core = { version = "0.2.0", path = "../context-memory-core" }
-diffy-core = { version = "0.2.0", path = "../diffy-core" }
-suite-foundation-core = { version = "0.2.0", path = "../suite-foundation-core" }
-covy-ingest = { version = "0.2.0", path = "../covy-ingest" }
-mapy-core = { version = "0.2.0", path = "../mapy-core" }
-glob.workspace = true
+context-kernel-core.workspace = true
+context-memory-core.workspace = true
+diffy-core.workspace = true
+suite-foundation-core.workspace = true
+covy-ingest.workspace = true
+mapy-core.workspace = true
 ignore.workspace = true
 notify.workspace = true
-packet28-daemon-core = { version = "0.2.0", path = "../packet28-daemon-core" }
-packet28-reducer-core = { version = "0.2.0", path = "../packet28-reducer-core" }
-packet28-search-core = { version = "0.2.0", path = "../packet28-search-core" }
+packet28-daemon-core.workspace = true
+packet28-daemon-protocol.workspace = true
+packet28-reducer-core.workspace = true
+packet28-search-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-suite-packet-core = { version = "0.2.0", path = "../suite-packet-core" }
-testy-core = { version = "0.2.0", path = "../testy-core" }
+suite-packet-core.workspace = true
+testy-core.workspace = true
 blake3.workspace = true
-bincode.workspace = true
+tokio = { workspace = true, features = ["net"] }
+libc.workspace = true
+fs2 = "0.4"
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

@@ -2,6 +2,63 @@ use super::support::*;
 use super::*;
 
 #[test]
+fn stable_instruction_prefix_stays_fixed_while_broker_brief_adapts() {
+    let state = daemon_test_state();
+    let root = daemon_test_root(&state);
+    let request = BrokerGetContextRequest {
+        task_id: "task-prefix-separation".to_string(),
+        action: Some(BrokerAction::Inspect),
+        include_sections: vec!["current_focus".to_string()],
+        ..BrokerGetContextRequest::default()
+    };
+    let auth_snapshot = suite_packet_core::AgentSnapshotPayload {
+        task_id: request.task_id.clone(),
+        focus_paths: vec!["src/auth.rs".to_string()],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    };
+    let cache_snapshot = suite_packet_core::AgentSnapshotPayload {
+        focus_paths: vec!["src/cache.rs".to_string()],
+        ..auth_snapshot.clone()
+    };
+    let instruction_request = context_kernel_core::InstructionSummaryRequest {
+        path: "AGENTS.md".to_string(),
+        content: "# Repository\n\n## Auth\nPreserve authorization checks.\n\n## Cache\nInvalidate changed state.\n".to_string(),
+        mode: suite_packet_core::InstructionRenderMode::Stable,
+        stable_config: suite_packet_core::InstructionStableConfig::default(),
+        task_id: Some(request.task_id.clone()),
+        budget_tokens: Some(128),
+        schema_version: 1,
+        ..context_kernel_core::InstructionSummaryRequest::default()
+    };
+
+    let stable_auth =
+        context_kernel_core::render_instruction(&instruction_request, Some(&auth_snapshot))
+            .unwrap();
+    let stable_cache =
+        context_kernel_core::render_instruction(&instruction_request, Some(&cache_snapshot))
+            .unwrap();
+    let auth_brief = render_brief(
+        &request.task_id,
+        "1",
+        &build_broker_sections(&root, &state, &request, &auth_snapshot, None, None),
+    );
+    let cache_brief = render_brief(
+        &request.task_id,
+        "2",
+        &build_broker_sections(&root, &state, &request, &cache_snapshot, None, None),
+    );
+
+    assert_eq!(stable_auth.summary_text(), stable_cache.summary_text());
+    assert_eq!(
+        stable_auth.rendered_sha256(),
+        stable_cache.rendered_sha256()
+    );
+    assert_ne!(auth_brief, cache_brief);
+    assert!(auth_brief.contains("src/auth.rs"));
+    assert!(cache_brief.contains("src/cache.rs"));
+}
+
+#[test]
 fn relevant_context_renders_human_summaries_without_debug_ids() {
     let request = BrokerGetContextRequest {
         task_id: "task-summary".to_string(),

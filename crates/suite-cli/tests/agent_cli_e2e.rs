@@ -2,6 +2,12 @@
 mod agent_core;
 #[path = "support/agent.rs"]
 mod agent_support;
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use predicates::prelude::*;
 use serde_json::Value;

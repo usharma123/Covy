@@ -54,20 +54,17 @@ pub struct RunArgs {
 pub fn run(args: RunArgs) -> Result<i32> {
     let cwd = crate::cmd_common::caller_cwd()?;
     let root = PathBuf::from(crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd));
-    let root = packet28_daemon_core::resolve_workspace_root(&root);
-    if args.backend == RuntimeBackend::Auto {
-        return run_reducer_aware(&root, &cwd, &args);
-    }
+    let root = packet28_daemon_protocol::paths::resolve_workspace_root(&root);
     let backend = args.backend;
 
     match backend {
+        RuntimeBackend::Auto => run_reducer_aware(&root, &cwd, &args),
         RuntimeBackend::LinuxPreload => run_linux_preload(&root, &args.command),
         RuntimeBackend::LinuxOci => run_linux_oci(&root, &args.command),
         RuntimeBackend::MacosSwap => run_macos_swap(&root, &args.command),
         RuntimeBackend::MacosFuse => run_macos_fuse(&root, &args.command),
         RuntimeBackend::WindowsFuse => run_windows_fuse(&root, &args.command),
         RuntimeBackend::ProxyOnly => run_proxy_only(&root, &args.command),
-        RuntimeBackend::Auto => unreachable!("auto backend should be resolved before execution"),
     }
 }
 
@@ -141,7 +138,7 @@ fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunAr
     record_run_savings(
         root,
         &RunSavingsRecord {
-            command: command_text.clone(),
+            command: command_text,
             cwd: cwd.display().to_string(),
             family: reduction.family.clone(),
             canonical_kind: reduction.canonical_kind.clone(),
@@ -160,8 +157,7 @@ fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunAr
     } else {
         println!("{}", reduction.compact_preview);
         println!(
-            "tokens: raw={} reduced={} saved={} ({:.1}%)",
-            raw_est_tokens, reduced_est_tokens, saved, savings_pct
+            "tokens: raw={raw_est_tokens} reduced={reduced_est_tokens} saved={saved} ({savings_pct:.1}%)"
         );
     }
     Ok(exit_code)
@@ -395,8 +391,7 @@ fn emit_filtered_run(run: FilteredRun<'_>) -> Result<i32> {
                 .unwrap_or("")
         );
         println!(
-            "tokens: raw={} reduced={} saved={} ({:.1}%)",
-            raw_est_tokens, reduced_est_tokens, saved, savings_pct
+            "tokens: raw={raw_est_tokens} reduced={reduced_est_tokens} saved={saved} ({savings_pct:.1}%)"
         );
     }
     Ok(exit_code)
@@ -546,10 +541,8 @@ fn run_macos_swap(root: &std::path::Path, argv: &[String]) -> Result<i32> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn run_macos_swap(_root: &std::path::Path, _argv: &[String]) -> Result<i32> {
-    Err(anyhow!(
-        "Packet28 run --backend macos-swap is only available on macOS"
-    ))
+fn run_macos_swap(root: &std::path::Path, argv: &[String]) -> Result<i32> {
+    crate::cmd_macos_swap::launch_macos_swap(root, argv, RuntimeBackend::MacosSwap.as_env_value())
 }
 
 fn run_linux_oci(root: &std::path::Path, argv: &[String]) -> Result<i32> {

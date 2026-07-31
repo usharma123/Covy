@@ -335,7 +335,7 @@ fn compile_fallback_matcher(request: &SearchRequest, query: &str) -> Result<rege
         query.to_string()
     };
     let pattern = if request.whole_word {
-        format!(r"\b(?:{})\b", pattern)
+        format!(r"\b(?:{pattern})\b")
     } else {
         pattern
     };

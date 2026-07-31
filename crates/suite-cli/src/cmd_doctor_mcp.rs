@@ -85,7 +85,12 @@ impl McpHarness {
                 .iter()
                 .position(|value| value.get("id").and_then(Value::as_u64) == Some(expected_id))
             {
-                return Ok(self.buffered.remove(index).unwrap());
+                if let Some(value) = self.buffered.remove(index) {
+                    return Ok(value);
+                }
+                return Err(self.diagnostic_error(format!(
+                    "MCP response buffer changed while reading id={expected_id}"
+                )));
             }
             let remaining = deadline
                 .checked_duration_since(std::time::Instant::now())
@@ -123,7 +128,12 @@ impl McpHarness {
                 .iter()
                 .position(|value| value.get("method").and_then(Value::as_str) == Some(method))
             {
-                return Ok(self.buffered.remove(index).unwrap());
+                if let Some(value) = self.buffered.remove(index) {
+                    return Ok(value);
+                }
+                return Err(self.diagnostic_error(format!(
+                    "MCP notification buffer changed while reading {method}"
+                )));
             }
             let remaining = deadline
                 .checked_duration_since(std::time::Instant::now())

@@ -141,3 +141,55 @@ fn test_check_json_output_stays_on_stdout() {
         .stdout(predicate::str::contains("\"passed\""))
         .stderr(predicate::str::contains("\"passed\"").not());
 }
+
+#[test]
+fn test_check_rejects_malformed_config_instead_of_running_with_defaults() {
+    let dir = TempDir::new().unwrap();
+    let config = dir.path().join("covy.toml");
+    std::fs::write(&config, "[gate\nfail_under_total = 101").unwrap();
+
+    covy_cmd()
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "check",
+            &fixture("lcov/basic.info"),
+            "--no-issues-state",
+            "--base",
+            "HEAD",
+            "--head",
+            "HEAD",
+            "--report",
+            "json",
+        ])
+        .assert()
+        .code(2)
+        .stderr(
+            predicate::str::contains("failed to parse config at")
+                .and(predicate::str::contains(config.to_str().unwrap())),
+        );
+}
+
+#[test]
+fn test_check_keeps_default_behavior_for_missing_config() {
+    let dir = TempDir::new().unwrap();
+    let missing_config = dir.path().join("missing.toml");
+
+    covy_cmd()
+        .args([
+            "--config",
+            missing_config.to_str().unwrap(),
+            "check",
+            &fixture("lcov/basic.info"),
+            "--no-issues-state",
+            "--base",
+            "HEAD",
+            "--head",
+            "HEAD",
+            "--report",
+            "json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"passed\": true"));
+}

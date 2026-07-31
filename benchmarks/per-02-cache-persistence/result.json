@@ -1,0 +1,40 @@
+{
+  "schema_version": 2,
+  "captured_at": "2026-07-30",
+  "source": {
+    "head": "6b120c8fd3d0b7fe5563b11d96eb9d2f7fb21ed5",
+    "files": {
+      "crates/context-memory-core/src/cache.rs": "29f620b594d6b110c4f758c20e31064d74e61297bd0352239cde85c4393cc12a",
+      "crates/context-memory-core/src/persist.rs": "09a34ff87d18e2cc965d557690624bd26e92350ccee15411c27cef2f36ccc0db",
+      "crates/context-memory-core/src/persistence_owner.rs": "95ea52895ec31e4896d793a3dbbe4afecb6a04604e488ae5d367e99b23a77567",
+      "crates/context-memory-core/examples/cache_persistence_experiment.rs": "ae4ea43f9bbfe8f8f5171b2cfebbc4419f44592a42213e637c5c1f605c0b604a"
+    }
+  },
+  "environment": {
+    "os": "Darwin 24.6.0",
+    "arch": "arm64",
+    "rustc": "rustc 1.93.0 (254b59607 2026-01-19) (Homebrew)",
+    "cargo": "cargo 1.93.0 (Homebrew)"
+  },
+  "fixture_entries": 512,
+  "measured_writes": 64,
+  "payload_bytes": 1024,
+  "repeats": 3,
+  "legacy_full_checkpoint_under_lock": {
+    "median_write_lock_ns": 51949458,
+    "median_elapsed_us": 3464877,
+    "median_payload_bytes": 533971344,
+    "median_coordination_bytes": 0,
+    "median_published_bytes": 533971344
+  },
+  "owned_delta_wal_after_lock": {
+    "median_write_lock_ns": 228125,
+    "median_elapsed_us": 29565,
+    "median_payload_bytes": 101461,
+    "median_coordination_bytes": 16,
+    "median_published_bytes": 101477
+  },
+  "lock_time_reduction_percent": 99.56087126067801,
+  "write_byte_reduction_percent": 99.98099579665833,
+  "parity_entries": 576
+}

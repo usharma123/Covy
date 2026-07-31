@@ -7,7 +7,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use packet28_daemon_core::{daemon_dir, HookRuntimeConfig};
+use packet28_daemon_protocol::hooks::HookRuntimeConfig;
+use packet28_daemon_protocol::paths::daemon_dir;
 use serde_json::{json, Value};
 
 use crate::cmd_hook::{process_claude_hook_payload, HookHttpServerArgs};

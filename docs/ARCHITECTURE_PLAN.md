@@ -62,13 +62,64 @@ runtime path has been benchmarked or revalidated.
 - Dependency summaries, JSON filtering, output envelopes, search/find, source
   reads, and command summaries live under `cmd_system/`.
 
+### Persistent search index
+
+- `packet28-search-core/src/lib.rs` is a documented compatibility facade. It
+  exposes only the typed error/result, manifest/runtime, lifecycle entrypoints,
+  query entrypoints, and the feature-gated shared-scan API.
+- `model.rs` owns public and persisted formats plus immutable loaded-generation
+  views; `postings.rs` owns gram derivation and the validated posting codec;
+  `layer.rs` owns repository scanning, layer construction, mmap loading, and
+  artifact validation; `query.rs` owns pure planning, candidate selection, and
+  source verification; `generation.rs` owns writer serialization, publication,
+  recovery, and retention; `paths.rs` owns repository-relative and on-disk
+  layout rules; `support.rs` owns narrow shared error/context helpers.
+- Generation publication depends on the immutable model view and never on query
+  orchestration. Shared-scan composition imports implementation entrypoints
+  from their owning modules rather than reaching back through the public facade.
+- `tests/module_architecture.rs` parses the Rust source to lock the facade export
+  set, reviewed file inventory and size ceilings, explicit acyclic dependency
+  graph, owning-module imports, generated-source provenance, and the absence of
+  production wildcard imports. External API tests compile every facade
+  entrypoint and exercise manifest JSON, lifecycle, reducer-search, and
+  shared-scan parity contracts.
+
 ### Daemon and tests
 
-- `crates/packet28-daemon-core` owns shared protocol, path, storage, integrity,
-  and request/response types.
-- `crates/packet28d` owns the server process. Broker context/handoff/search
-  operations, hooks, indexing, launch, planning, runtime files, server
-  transports, state, and watches are separate modules.
+- `crates/packet28-daemon-protocol` owns implementation-free wire DTOs,
+  framing, and endpoint paths. `crates/packet28-daemon-client` owns
+  authenticated endpoint discovery, Unix server-credential checks, and the TCP
+  capability prelude without depending on runtime implementations.
+  `crates/packet28-daemon-core` owns typed storage, integrity, leases, recovery,
+  and retention plus a frozen `0.2.x` compatibility facade.
+- `crates/packet28d/src/application.rs` owns the server lifecycle and
+  `packet28d::serve`; `src/main.rs` is only the CLI/exit adapter. Broker
+  context, handoff, search, rendering, limits, snapshots, and writes live under
+  `src/broker/` behind an explicit crate-internal facade. Hooks, indexing,
+  launch, planning, runtime files, server dispatch, state, and watches remain
+  separate modules.
+- [Daemon runtime](daemon-runtime.md) records startup/shutdown order,
+  cancellation, transport, persistence/recovery, compatibility/errors, and the
+  reviewed happy-path example inventory and exclusions.
+- Tokio is confined to the `packet28d`/`suite-cli` process-orchestration
+  boundary. TCP and Unix listeners share one cancellation signal and owned
+  connection task set; framing has separate header, body, and write deadlines.
+  CPU-heavy parsing/serialization and synchronous kernel, repository, index,
+  SQLite, and filesystem work cross a bounded blocking executor, while their
+  existing Rayon data parallelism remains unchanged.
+- Daemon subscriber and watch ingress queues are bounded. A subscriber that
+  falls behind is disconnected after its queued frames drain and resumes from
+  its last sequence through `TaskSubscribe.after_seq`; watch overflow is
+  coalesced per watch generation and surfaced on the next `watch_triggered`
+  event as `queue_overflowed=true` before conservative replanning.
+- Runtime limits have nonzero defaults and can be tuned with
+  `PACKET28D_MAX_CONNECTIONS`, `PACKET28D_MAX_PENDING_TCP_AUTHENTICATIONS`,
+  `PACKET28D_MAX_BLOCKING_OPERATIONS`,
+  `PACKET28D_SUBSCRIBER_QUEUE_CAPACITY`, `PACKET28D_WATCH_QUEUE_CAPACITY`,
+  `PACKET28D_BACKGROUND_QUEUE_CAPACITY`,
+  `PACKET28D_FRAME_HEADER_TIMEOUT_MS`, `PACKET28D_FRAME_BODY_TIMEOUT_MS`,
+  `PACKET28D_FRAME_WRITE_TIMEOUT_MS`, `PACKET28D_TRANSPORT_AUTH_TIMEOUT_MS`,
+  and `PACKET28D_SHUTDOWN_GRACE_MS`.
 - `cmd_daemon.rs` defines the CLI surface; `cmd_daemon_client.rs` and
   `cmd_daemon_commands.rs` own client transport/lifecycle and command handlers.
 - Large route-registry and hook unit suites are in
@@ -99,7 +150,9 @@ boundaries. Verify their callers, persisted-data role, and tests before removal.
 
 - Continue reducing the size of orchestration facades such as `cmd_mcp.rs`,
   `cmd_setup.rs`, `cmd_dashboard.rs`, `cmd_system.rs`, `memory_store.rs`, and
-  `packet28d/src/main.rs` when a cohesive responsibility can be extracted.
+  `packet28d/src/application.rs` when a cohesive responsibility can be
+  extracted. Keep `packet28d/src/main.rs` as the shallow CLI and process-exit
+  adapter enforced by `scripts/check_architecture.py`.
 - Narrow broad internal re-exports and remove `allow(dead_code)` exceptions only
   after static reference checks and targeted runtime tests show they are
   unnecessary.

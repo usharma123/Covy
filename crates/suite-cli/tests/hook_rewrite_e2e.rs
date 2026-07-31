@@ -1,6 +1,15 @@
 #[path = "support/hook_rewrite.rs"]
 mod hook_rewrite;
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
+use std::fs;
+
+use packet28_daemon_protocol::paths::{hook_runtime_config_path, runtime_path, task_registry_path};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -101,6 +110,181 @@ fn test_hook_rewrite_cli_degrades_gracefully_on_bad_json_and_no_rewrite() {
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
         .assert()
         .success();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_hook_rewrite_cli_malformed_runtime_config_skips_claude_and_cursor_processing() {
+    let dir = TempDir::new().unwrap();
+    let config_path = hook_runtime_config_path(dir.path());
+    fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    let original = b"{\"rewrite_enabled\": tru".to_vec();
+    fs::write(&config_path, &original).unwrap();
+    let root = dir.path().to_str().unwrap();
+    let payloads = [
+        (
+            "claude",
+            json!({
+                "hook_event_name":"PreToolUse",
+                "task_id":"task-invalid-config-claude",
+                "session_id":"session-invalid-config-claude",
+                "cwd":root,
+                "tool_name":"Bash",
+                "tool_input":{"command":"git status --short"}
+            }),
+        ),
+        (
+            "cursor",
+            json!({
+                "hook_event_name":"beforeShellExecution",
+                "conversation_id":"session-invalid-config-cursor",
+                "cwd":root,
+                "command":"git status --short"
+            }),
+        ),
+    ];
+
+    for (runtime, payload) in payloads {
+        let (status, stdout, stderr) = run_hook_raw(
+            runtime,
+            dir.path(),
+            &serde_json::to_string(&payload).unwrap(),
+        );
+        assert_eq!(status, 0, "{runtime}: {stderr}");
+        assert!(stdout.trim().is_empty(), "{runtime}: {stdout}");
+        assert!(
+            stderr.contains("failed to parse hook runtime config"),
+            "{runtime}: {stderr}"
+        );
+    }
+
+    assert_eq!(fs::read(config_path).unwrap(), original);
+    assert!(!runtime_path(dir.path()).exists());
+    assert!(!task_registry_path(dir.path()).exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn test_hook_rewrite_cli_unreadable_runtime_config_skips_processing() {
+    let dir = TempDir::new().unwrap();
+    let config_path = hook_runtime_config_path(dir.path());
+    fs::create_dir_all(&config_path).unwrap();
+    let marker_path = config_path.join("preserve.bin");
+    let original = vec![0x00, 0xff, 0x7f];
+    fs::write(&marker_path, &original).unwrap();
+    let payload = json!({
+        "hook_event_name":"PreToolUse",
+        "task_id":"task-unreadable-config",
+        "session_id":"session-unreadable-config",
+        "cwd":dir.path().to_str().unwrap(),
+        "tool_name":"Bash",
+        "tool_input":{"command":"git status --short"}
+    });
+
+    let (status, stdout, stderr) = run_hook_raw(
+        "claude",
+        dir.path(),
+        &serde_json::to_string(&payload).unwrap(),
+    );
+
+    assert_eq!(status, 0, "{stderr}");
+    assert!(stdout.trim().is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("failed to read hook runtime config"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(marker_path).unwrap(), original);
+    assert!(config_path.is_dir());
+    assert!(!task_registry_path(dir.path()).exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn test_hook_rewrite_status_uses_enabled_defaults_when_runtime_config_is_missing() {
+    let dir = TempDir::new().unwrap();
+
+    let output = suite_cmd()
+        .args([
+            "hook",
+            "rewrite",
+            "--root",
+            dir.path().to_str().unwrap(),
+            "status",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        (
+            status["rewrite_enabled"].as_bool(),
+            status["hooks_enabled"].as_bool(),
+            status["fallback_post_tool_capture"].as_bool(),
+        ),
+        (Some(true), Some(true), Some(true))
+    );
+    assert!(!hook_runtime_config_path(dir.path()).exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn test_hook_rewrite_status_rejects_malformed_config_without_replacing_bytes() {
+    let dir = TempDir::new().unwrap();
+    let config_path = hook_runtime_config_path(dir.path());
+    fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    let original = b"{\"hooks_enabled\": tru".to_vec();
+    fs::write(&config_path, &original).unwrap();
+
+    let output = suite_cmd()
+        .args([
+            "hook",
+            "rewrite",
+            "--root",
+            dir.path().to_str().unwrap(),
+            "status",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("failed to parse hook runtime config"),
+        "{output:?}"
+    );
+    assert_eq!(fs::read(config_path).unwrap(), original);
+}
+
+#[test]
+#[cfg(unix)]
+fn test_hook_rewrite_toggle_rejects_invalid_utf8_without_replacing_bytes() {
+    let dir = TempDir::new().unwrap();
+    let config_path = hook_runtime_config_path(dir.path());
+    fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    let original = vec![b'{', b'}', 0xff];
+    fs::write(&config_path, &original).unwrap();
+
+    let output = suite_cmd()
+        .args([
+            "hook",
+            "rewrite",
+            "--root",
+            dir.path().to_str().unwrap(),
+            "off",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("failed to read hook runtime config"),
+        "{output:?}"
+    );
+    assert_eq!(fs::read(config_path).unwrap(), original);
 }
 
 #[test]

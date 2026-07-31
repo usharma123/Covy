@@ -1,6 +1,6 @@
 use covy_core::model::{CoverageData, CoverageFormat, FileCoverage};
 use covy_core::CovyError;
-use quick_xml::events::Event;
+use quick_xml::events::{BytesText, Event};
 use quick_xml::Reader;
 
 use crate::Ingestor;
@@ -113,11 +113,8 @@ fn parse_cobertura(data: &[u8]) -> Result<CoverageData, CovyError> {
             }
             Ok(Event::Text(ref e)) => {
                 if in_sources {
-                    if let Ok(text) = e.unescape() {
-                        let s = text.trim().to_string();
-                        if !s.is_empty() {
-                            sources.push(s);
-                        }
+                    if let Some(source) = decoded_source(e) {
+                        sources.push(source);
                     }
                 }
             }
@@ -134,6 +131,13 @@ fn parse_cobertura(data: &[u8]) -> Result<CoverageData, CovyError> {
     }
 
     Ok(result)
+}
+
+fn decoded_source(event: &BytesText<'_>) -> Option<String> {
+    let decoded = event.decode().ok()?;
+    let unescaped = quick_xml::escape::unescape(&decoded).ok()?;
+    let source = unescaped.trim();
+    (!source.is_empty()).then(|| source.to_owned())
 }
 
 fn get_attr(e: &quick_xml::events::BytesStart, name: &[u8]) -> Option<String> {
@@ -163,6 +167,13 @@ fn normalize_slashes(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decoded_source_unescapes_and_trims_text() {
+        let event = BytesText::from_escaped("  src&amp;generated  ");
+
+        assert_eq!(decoded_source(&event).as_deref(), Some("src&generated"));
+    }
 
     #[test]
     fn test_parse_cobertura_basic() {

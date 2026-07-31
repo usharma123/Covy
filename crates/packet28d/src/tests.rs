@@ -1,16 +1,27 @@
 use super::*;
+use crate::application::{
+    bind_preferred_daemon_listener, bind_tcp_listener, bind_unix_listener, effective_uid,
+    run_transport, shutdown_persistent_kernels, supervise_daemon_tasks, DaemonListener,
+    DaemonRuntimeTasks,
+};
+use crate::broker::testing::*;
+use crate::planning::{merged_unique_many, normalize_plan_steps};
 
 mod action_critic;
 mod budget;
+mod cancellation;
 mod code_evidence;
 mod context_debt;
 mod context_render;
 mod evidence_confidence;
 mod handoff;
 mod instruction_resolution;
+mod persistence;
 mod plan_validation;
+mod replan;
 mod search;
-mod support;
+pub(crate) mod support;
+mod transport_runtime;
 
 #[test]
 fn explicit_limits_override_verbosity_alias() {

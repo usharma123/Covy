@@ -1,5 +1,192 @@
 use super::*;
 
+#[tokio::test]
+async fn local_server_dispatches_mixed_json_rpc_batches() {
+    let root = tempfile::tempdir().unwrap();
+    let session = Arc::new(Mutex::new(McpSessionState::default()));
+    let response = dispatch_local_payload(
+        root.path(),
+        &session,
+        json!([
+            {"jsonrpc":"2.0","id":1,"method":"tools/list"},
+            {"jsonrpc":"2.0","method":"notifications/initialized"},
+            {"jsonrpc":"2.0","id":"missing","method":"unsupported/test"}
+        ]),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    let responses = response.as_array().unwrap();
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0]["id"], 1);
+    assert!(responses[0]["result"]["tools"].is_array());
+    assert_eq!(responses[1]["id"], "missing");
+    assert_eq!(responses[1]["error"]["code"], -32601);
+    assert!(session.lock().unwrap().initialized);
+}
+
+#[tokio::test]
+async fn local_server_rejects_empty_and_invalid_batches() {
+    let root = tempfile::tempdir().unwrap();
+    let session = Arc::new(Mutex::new(McpSessionState::default()));
+
+    for payload in [json!([]), json!([17])] {
+        let response = dispatch_local_payload(root.path(), &session, payload)
+            .await
+            .unwrap()
+            .unwrap();
+        let error = response
+            .as_array()
+            .and_then(|responses| responses.first())
+            .unwrap_or(&response);
+        assert_eq!(error["id"], Value::Null);
+        assert_eq!(error["error"]["code"], -32600);
+    }
+
+    assert!(dispatch_local_payload(
+        root.path(),
+        &session,
+        json!([
+            {"jsonrpc":"2.0","method":"notifications/initialized"}
+        ]),
+    )
+    .await
+    .unwrap()
+    .is_none());
+}
+
+#[tokio::test]
+async fn local_batch_limit_plus_one_is_bounded_and_next_request_remains_responsive() {
+    let root = tempfile::tempdir().unwrap();
+    let session = Arc::new(Mutex::new(McpSessionState::default()));
+    let oversized = Value::Array(vec![
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"});
+        MAX_MCP_BATCH_MESSAGES + 1
+    ]);
+
+    let rejection = dispatch_local_payload(root.path(), &session, oversized)
+        .await
+        .unwrap()
+        .unwrap();
+    let responses = rejection.as_array().unwrap();
+    assert_eq!(
+        (
+            responses.len(),
+            responses[0]["id"].clone(),
+            responses[0]["error"]["code"].clone(),
+        ),
+        (1, Value::Null, json!(-32000))
+    );
+
+    let next = dispatch_local_payload(
+        root.path(),
+        &session,
+        json!({"jsonrpc":"2.0","id":"next","method":"tools/list"}),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(next["id"], "next");
+}
+
+fn task_version_json_path(root: &Path, task_id: &str, context_version: &str) -> PathBuf {
+    validated_task_version_json_path(root, task_id, context_version).unwrap()
+}
+
+#[test]
+fn artifact_fetch_entry_points_reject_nonopaque_external_handles() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::NamedTempFile::new().unwrap();
+
+    for handle in [
+        "../outside.json",
+        outside.path().to_str().unwrap(),
+        "Result.json",
+        "con.json",
+    ] {
+        assert!(
+            support::load_tool_result_artifact(root.path(), "task", Some(handle), None,).is_err()
+        );
+        assert!(support::load_raw_output_artifact(root.path(), "task", handle).is_err());
+    }
+    assert!(!root.path().join(".packet28").exists());
+}
+
+#[test]
+fn artifact_store_entry_point_validates_before_task_store_mutation() {
+    let root = tempfile::tempdir().unwrap();
+    let overlong = "a".repeat(251);
+
+    for invocation_id in ["../escape", "Invocation", "con", overlong.as_str()] {
+        assert!(support::store_tool_artifact(
+            root.path(),
+            "task",
+            invocation_id,
+            "result",
+            &json!({"ok": true}),
+        )
+        .is_err());
+    }
+    assert!(!root.path().join(".packet28").exists());
+}
+
+#[test]
+fn artifact_store_and_fetch_entry_points_roundtrip_opaque_handles() {
+    let root = tempfile::tempdir().unwrap();
+    let artifact_id = support::store_tool_artifact(
+        root.path(),
+        "task",
+        "invocation-1",
+        "result",
+        &json!({"task_id": "task", "value": 1}),
+    )
+    .unwrap();
+
+    let (loaded_id, payload) =
+        support::load_tool_result_artifact(root.path(), "task", Some(&artifact_id), None).unwrap();
+
+    assert_eq!(loaded_id, artifact_id);
+    assert_eq!(payload["value"], 1);
+}
+
+#[test]
+fn context_artifact_identity_requires_exact_version_and_artifact_fields() {
+    assert!(validate_context_artifact_identity(
+        &json!({"context_version": "ctx-1", "artifact_id": "ctx-1"}),
+        "ctx-1",
+    )
+    .is_ok());
+    assert!(
+        validate_context_artifact_identity(&json!({"context_version": "ctx-1"}), "ctx-1",).is_err()
+    );
+    assert!(validate_context_artifact_identity(
+        &json!({"context_version": "ctx-1", "artifact_id": "ctx-2"}),
+        "ctx-1",
+    )
+    .is_err());
+}
+
+#[test]
+fn native_tool_lifecycle_matches_reviewed_structural_snapshot() {
+    let mut actual = native_tools::structural_snapshot();
+    let all_tools = tools_list_payload(McpToolset::All);
+    actual["all_tools_list_names"] = Value::Array(
+        all_tools["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool.get("name").cloned())
+            .collect(),
+    );
+    let expected: Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/mcp/native_tool_lifecycle.json"
+    ))
+    .unwrap();
+
+    assert_eq!(actual, expected);
+}
+
 #[test]
 fn tools_list_exposes_search_fast_without_task_id() {
     let root = tempfile::tempdir().unwrap();
@@ -27,13 +214,13 @@ fn tools_list_exposes_fff_search_strategy() {
 
     for name in ["packet28_search", "packet28_search_fast"] {
         let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
-        let strategies = tool["inputSchema"]["properties"]["search_strategy"]["enum"]
+        let has_fff = tool["inputSchema"]["properties"]["search_strategy"]["enum"]
             .as_array()
             .unwrap()
             .iter()
             .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(strategies.contains(&"fff"));
+            .any(|strategy| strategy == "fff");
+        assert!(has_fff);
     }
 }
 

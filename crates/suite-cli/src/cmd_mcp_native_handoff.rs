@@ -4,21 +4,17 @@ pub(crate) fn handle_packet28_verify_handoff(
     root: &Path,
     args: Packet28VerifyHandoffArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.verify_handoff requires task_id"));
     }
     let artifact_id = args.artifact_id.or(args.context_version).ok_or_else(|| {
         anyhow!("packet28.verify_handoff requires artifact_id or context_version")
     })?;
-    let path = task_version_json_path(root, task_id, &artifact_id);
-    let bytes = fs::read(&path).with_context(|| {
-        format!(
-            "failed to read stored handoff context artifact '{}'",
-            path.display()
-        )
-    })?;
-    let payload: Value = serde_json::from_slice(&bytes)?;
+    let (path, bytes) = read_validated_context_artifact(root, task_id, &artifact_id)?;
+    let payload: Value = serde_json::from_slice(&bytes)
+        .with_context(|| format!("invalid context artifact '{}'", path.display()))?;
+    validate_context_artifact_identity(&payload, &artifact_id)?;
     let mut missing = Vec::new();
     let brief = payload
         .get("brief")
@@ -81,21 +77,17 @@ pub(crate) fn handle_packet28_prompt_pressure(
     root: &Path,
     args: Packet28PromptPressureArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.prompt_pressure requires task_id"));
     }
     let artifact_id = args.artifact_id.or(args.context_version).ok_or_else(|| {
         anyhow!("packet28.prompt_pressure requires artifact_id or context_version")
     })?;
-    let path = task_version_json_path(root, task_id, &artifact_id);
-    let bytes = fs::read(&path).with_context(|| {
-        format!(
-            "failed to read stored handoff context artifact '{}'",
-            path.display()
-        )
-    })?;
-    let payload: Value = serde_json::from_slice(&bytes)?;
+    let (path, bytes) = read_validated_context_artifact(root, task_id, &artifact_id)?;
+    let payload: Value = serde_json::from_slice(&bytes)
+        .with_context(|| format!("invalid context artifact '{}'", path.display()))?;
+    validate_context_artifact_identity(&payload, &artifact_id)?;
     let budget_tokens = args.budget_tokens.unwrap_or(8_000).max(1);
     let next_prompt = args.next_prompt.unwrap_or_default();
     let context_tokens = estimate_tokens_for_value(&payload);
@@ -163,7 +155,7 @@ pub(crate) fn handle_packet28_handoff_diff(
     root: &Path,
     args: Packet28HandoffDiffArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.handoff_diff requires task_id"));
     }
@@ -226,7 +218,7 @@ pub(crate) fn handle_packet28_handoff_compress(
     root: &Path,
     args: Packet28HandoffCompressionArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.handoff_compress requires task_id"));
     }
@@ -291,7 +283,7 @@ pub(crate) fn handle_packet28_handoff_lint_dependencies(
     root: &Path,
     args: Packet28HandoffDependencyLintArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!(
             "packet28.handoff_lint_dependencies requires task_id"
@@ -330,7 +322,7 @@ pub(crate) fn handle_packet28_handoff_lint_paths(
     root: &Path,
     args: Packet28HandoffPathLintArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.handoff_lint_paths requires task_id"));
     }
@@ -366,7 +358,7 @@ pub(crate) fn handle_packet28_handoff_lint_tests(
     root: &Path,
     args: Packet28HandoffTestLintArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.handoff_lint_tests requires task_id"));
     }
@@ -408,7 +400,7 @@ pub(crate) fn handle_packet28_handoff_lint_stale_commands(
     root: &Path,
     args: Packet28HandoffStaleCommandLintArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!(
             "packet28.handoff_lint_stale_commands requires task_id"
@@ -452,7 +444,7 @@ pub(crate) fn handle_packet28_handoff_lint_environment(
     root: &Path,
     args: Packet28HandoffEnvironmentLintArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!(
             "packet28.handoff_lint_environment requires task_id"
@@ -500,7 +492,7 @@ pub(crate) fn handle_packet28_handoff_lint_all(
     root: &Path,
     args: Packet28HandoffLintAllArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.handoff_lint_all requires task_id"));
     }
@@ -611,7 +603,7 @@ pub(crate) fn handle_packet28_handoff_fix_plan(
     root: &Path,
     args: Packet28HandoffFixPlanArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.handoff_fix_plan requires task_id"));
     }
@@ -642,7 +634,7 @@ pub(crate) fn handle_packet28_handoff_repair_verify(
     root: &Path,
     args: Packet28HandoffRepairVerifyArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.handoff_repair_verify requires task_id"));
     }
@@ -656,7 +648,9 @@ pub(crate) fn handle_packet28_handoff_repair_verify(
         .after_artifact_id
         .or(args.after_context_version)
         .ok_or_else(|| {
-            anyhow!("packet28.handoff_repair_verify requires after_artifact_id or after_context_version")
+            anyhow!(
+                "packet28.handoff_repair_verify requires after_artifact_id or after_context_version"
+            )
         })?;
     let before = handle_packet28_handoff_lint_all(
         root,
@@ -704,7 +698,7 @@ pub(crate) fn handle_packet28_handoff_lint_trends(
     root: &Path,
     args: Packet28HandoffLintTrendArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.handoff_lint_trends requires task_id"));
     }
@@ -778,7 +772,7 @@ pub(crate) fn handle_packet28_handoff_lint_regressions(
     root: &Path,
     args: Packet28HandoffLintRegressionArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!(
             "packet28.handoff_lint_regressions requires task_id"
@@ -850,14 +844,15 @@ fn read_handoff_payload(
     artifact_id: &str,
     label: &str,
 ) -> Result<Value> {
-    let path = task_version_json_path(root, task_id, artifact_id);
-    let bytes = fs::read(&path).with_context(|| {
+    let (path, bytes) = read_validated_context_artifact(root, task_id, artifact_id)?;
+    let payload = serde_json::from_slice(&bytes).with_context(|| {
         format!(
-            "failed to read stored {label} context artifact '{}'",
+            "invalid stored {label} context artifact '{}'",
             path.display()
         )
     })?;
-    Ok(serde_json::from_slice(&bytes)?)
+    validate_context_artifact_identity(&payload, artifact_id)?;
+    Ok(payload)
 }
 
 fn available_handoff_artifacts(payload: &Value) -> Vec<String> {
@@ -1225,7 +1220,7 @@ fn discover_handoff_artifact_ids(
     task_id: &str,
     max_artifacts: usize,
 ) -> Result<Vec<String>> {
-    let probe = task_version_json_path(root, task_id, "__packet28_probe__");
+    let probe = validated_task_version_json_path(root, task_id, "__packet28_probe__")?;
     let Some(dir) = probe.parent() else {
         return Ok(Vec::new());
     };
@@ -1304,7 +1299,7 @@ fn is_repo_relative_path_reference(token: &str) -> bool {
 }
 
 fn latest_relevant_edit_at(
-    events: &[packet28_daemon_core::DaemonEventFrame],
+    events: &[packet28_daemon_protocol::message::DaemonEventFrame],
     changed_paths: &[String],
 ) -> Option<u64> {
     events
@@ -1315,7 +1310,7 @@ fn latest_relevant_edit_at(
 }
 
 fn latest_command_event_at(
-    events: &[packet28_daemon_core::DaemonEventFrame],
+    events: &[packet28_daemon_protocol::message::DaemonEventFrame],
     command_ref: &str,
 ) -> Option<u64> {
     events
@@ -1332,7 +1327,10 @@ fn latest_command_event_at(
         .max()
 }
 
-fn is_edit_event(frame: &packet28_daemon_core::DaemonEventFrame, changed_paths: &[String]) -> bool {
+fn is_edit_event(
+    frame: &packet28_daemon_protocol::message::DaemonEventFrame,
+    changed_paths: &[String],
+) -> bool {
     let kind = frame.event.kind.to_ascii_lowercase();
     if !kind.contains("edit") && !kind.contains("write") {
         return false;
@@ -1345,7 +1343,7 @@ fn is_edit_event(frame: &packet28_daemon_core::DaemonEventFrame, changed_paths: 
         .any(|path| changed_paths.iter().any(|changed| changed == path))
 }
 
-fn frame_event_paths(frame: &packet28_daemon_core::DaemonEventFrame) -> Vec<String> {
+fn frame_event_paths(frame: &packet28_daemon_protocol::message::DaemonEventFrame) -> Vec<String> {
     frame
         .event
         .data

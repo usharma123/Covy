@@ -1,0 +1,38 @@
+[package]
+name = "context-kernel-builtins"
+version.workspace = true
+publish.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+context-kernel-mechanism.workspace = true
+suite-packet-core.workspace = true
+suite-foundation-core.workspace = true
+guardy-core.workspace = true
+suite-policy-core.workspace = true
+contextq-core.workspace = true
+context-memory-core.workspace = true
+stacky-core.workspace = true
+buildy-core.workspace = true
+suite-proxy-core.workspace = true
+mapy-core.workspace = true
+diffy-core.workspace = true
+testy-core.workspace = true
+testy-cli-common.workspace = true
+covy-ingest.workspace = true
+roaring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+glob.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

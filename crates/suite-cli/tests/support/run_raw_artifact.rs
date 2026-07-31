@@ -6,12 +6,7 @@ pub fn suite_cmd() -> Command {
 }
 
 pub fn git(root: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {:?} failed with {status}", args);
+    crate::process_harness::run_git(root, args);
 }
 
 pub fn init_repo(root: &Path) {

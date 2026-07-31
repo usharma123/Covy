@@ -2,22 +2,26 @@
 mod mcp_native;
 #[path = "support/mcp_native_read.rs"]
 mod mcp_native_read;
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use mcp_native::{
     ensure_packet28d_built, init_repo, initialize_mcp_session, read_mcp_message_for_id,
-    start_mcp_server, suite_cmd, write_mcp_message, write_repo_fixture,
+    start_mcp_server, stop_mcp_server, suite_cmd, write_mcp_message, write_repo_fixture,
 };
 use mcp_native_read::{
     git, run_claude_hook, write_cached_coverage_state, write_cached_testmap_state,
 };
+use process_harness::McpHarness;
 use serde_json::{json, Value};
-use std::io::BufReader;
-use std::process::{ChildStdin, ChildStdout};
 use tempfile::TempDir;
 
 fn write_intention_via_mcp(
-    stdin: &mut ChildStdin,
-    stdout: &mut BufReader<ChildStdout>,
+    server: &mut McpHarness,
     id: u64,
     task_id: &str,
     text: &str,
@@ -25,7 +29,7 @@ fn write_intention_via_mcp(
     paths: &[&str],
 ) -> Value {
     write_mcp_message(
-        stdin,
+        server,
         &json!({
             "jsonrpc":"2.0",
             "id":id,
@@ -41,7 +45,7 @@ fn write_intention_via_mcp(
             }
         }),
     );
-    read_mcp_message_for_id(stdout, id)
+    read_mcp_message_for_id(server, id)
 }
 
 #[test]
@@ -67,19 +71,20 @@ fn test_mcp_native_read_auto_captures_regions() {
     write_cached_coverage_state(dir.path());
     write_cached_testmap_state(dir.path());
 
-    let (mut child, mut stdin, mut stdout) = start_mcp_server(dir.path());
-    initialize_mcp_session(&mut stdin, &mut stdout);
+    let mut server = start_mcp_server(dir.path());
+    initialize_mcp_session(&mut server);
     let _ = write_intention_via_mcp(
-        &mut stdin,
-        &mut stdout,
+        &mut server,
         2,
         "task-native-read",
         "Locate the Alpha definition",
         "investigating",
         &["src/alpha.rs"],
     );
-    child.kill().unwrap();
-    child.wait().unwrap();
+    // Keep the MCP process (and therefore the daemon it started) alive while
+    // the external hooks run. The bounded process harness owns the full child
+    // process group, so stopping MCP here would intentionally terminate the
+    // daemon before the hook-captured state is inspected.
     let (status, _) = run_claude_hook(
         dir.path(),
         &json!({
@@ -102,11 +107,8 @@ fn test_mcp_native_read_auto_captures_regions() {
     );
     assert_eq!(status, 0);
 
-    let (mut child, mut stdin, mut stdout) = start_mcp_server(dir.path());
-    initialize_mcp_session(&mut stdin, &mut stdout);
-
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":3,
@@ -121,7 +123,7 @@ fn test_mcp_native_read_auto_captures_regions() {
             }
         }),
     );
-    let inspect = read_mcp_message_for_id(&mut stdout, 3);
+    let inspect = read_mcp_message_for_id(&mut server, 3);
     let inspect_payload = &inspect["result"]["structuredContent"]["context"];
     assert!(inspect["result"]["structuredContent"]["handoff_ready"]
         .as_bool()
@@ -141,8 +143,7 @@ fn test_mcp_native_read_auto_captures_regions() {
         .unwrap()
         .iter()
         .any(|item| item == "src/alpha.rs"));
-    child.kill().unwrap();
-    child.wait().unwrap();
+    stop_mcp_server(server);
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])

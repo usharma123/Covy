@@ -1,0 +1,1323 @@
+{
+  "schema": "packet28.per06.shared-scan.v1",
+  "audit_item": "PER-06",
+  "measured_at_unix_seconds": 1785282131,
+  "profile": "release",
+  "command": [
+    "benchmarks/per-06-shared-scan/target/release/packet28-per06-shared-scan",
+    "--iterations",
+    "9",
+    "--output",
+    "benchmarks/per-06-shared-scan/result.json"
+  ],
+  "source": {
+    "git_head": "bd2adb897a08075e00a7bbba0697ad3bf3ee6982",
+    "harness_blake3": "88c3b9a1c4489c0111a5fa1ef30e649acdc5106f3f14ee76679bd655bc567f4f"
+  },
+  "toolchain": {
+    "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: aarch64-apple-darwin\nrelease: 1.93.1\nLLVM version: 21.1.8",
+    "cargo": "cargo 1.93.1 (083ac5135 2025-12-15)",
+    "target": "aarch64-macos"
+  },
+  "host": {
+    "os": "macos",
+    "arch": "aarch64",
+    "uname": "Darwin Mac 24.6.0 Darwin Kernel Version 24.6.0: Wed Oct  8 21:15:02 PDT 2025; root:xnu-11417.140.69.703.11~1/RELEASE_ARM64_T6041 arm64",
+    "cpu": null,
+    "memory_bytes": null
+  },
+  "method": {
+    "iterations": 9,
+    "fixture_roots": "separate and shared strategies use independently materialized, byte-identical roots",
+    "cache_state": "steady-state warm page cache after one unmeasured warmup per strategy and fixture",
+    "order_control": "strategy execution order alternates every iteration",
+    "consumer_work": "both strategies perform identical per-consumer BLAKE3 work; only discovery/read ownership differs",
+    "allocation_scope": "all successful Rust global allocator calls made during each complete scan operation",
+    "io_scope": "exact application-level walk passes, yielded entries, explicit metadata calls, successful fs::read calls, and returned bytes",
+    "content_residency_bound": "the shared prototype retains at most one raw file buffer and drops it after both consumers",
+    "evidence_boundary": [
+      "timings are machine-local steady-state observations, not cold-I/O or end-to-end index-build claims",
+      "read and byte reductions are explicit harness operations and do not rely on page-cache timing",
+      "consumer digests prove equivalent fixture inputs, not equivalence of private production parser/index encodings",
+      "production integration requires feature-gated parity and end-to-end validation in both owning crates"
+    ]
+  },
+  "fixtures": [
+    {
+      "fixture": {
+        "name": "small-files",
+        "files_written": 527,
+        "bytes_written": 2752586,
+        "regular_source_files": 320,
+        "test_source_files": 80,
+        "regex_only_text_files": 100,
+        "oversize_source_files": 0,
+        "oversize_regex_only_files": 0,
+        "binary_files": 20
+      },
+      "output_parity_asserted": true,
+      "output": {
+        "map": {
+          "documents": 403,
+          "logical_bytes": 1818661,
+          "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+        },
+        "regex": {
+          "documents": 502,
+          "logical_bytes": 2621477,
+          "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+        }
+      },
+      "separate": {
+        "operation": "two independent discovery/read passes",
+        "exact_io_per_iteration": {
+          "walk_passes": 2,
+          "walked_entries": 1071,
+          "metadata_calls": 928,
+          "successful_read_calls": 928,
+          "bytes_read": 4522099,
+          "peak_retained_content_files": 1,
+          "peak_retained_content_bytes": 16384
+        },
+        "exact_io_stable_across_iterations": true,
+        "median_allocations": {
+          "allocation_calls": 7351,
+          "reallocation_calls": 2939,
+          "deallocation_calls": 7349,
+          "requested_bytes": 5624483,
+          "deallocated_bytes": 5307818
+        },
+        "median_elapsed_nanos": 37792959,
+        "raw_iterations": [
+          {
+            "elapsed_nanos": 39183625,
+            "allocations": {
+              "allocation_calls": 7351,
+              "reallocation_calls": 2939,
+              "deallocation_calls": 7349,
+              "requested_bytes": 5624483,
+              "deallocated_bytes": 5307818
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 1071,
+              "metadata_calls": 928,
+              "successful_read_calls": 928,
+              "bytes_read": 4522099,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 37736458,
+            "allocations": {
+              "allocation_calls": 7351,
+              "reallocation_calls": 2939,
+              "deallocation_calls": 7349,
+              "requested_bytes": 5624483,
+              "deallocated_bytes": 5307818
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 1071,
+              "metadata_calls": 928,
+              "successful_read_calls": 928,
+              "bytes_read": 4522099,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 38582542,
+            "allocations": {
+              "allocation_calls": 7351,
+              "reallocation_calls": 2939,
+              "deallocation_calls": 7349,
+              "requested_bytes": 5624483,
+              "deallocated_bytes": 5307818
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 1071,
+              "metadata_calls": 928,
+              "successful_read_calls": 928,
+              "bytes_read": 4522099,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 36174292,
+            "allocations": {
+              "allocation_calls": 7351,
+              "reallocation_calls": 2939,
+              "deallocation_calls": 7349,
+              "requested_bytes": 5624483,
+              "deallocated_bytes": 5307818
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 1071,
+              "metadata_calls": 928,
+              "successful_read_calls": 928,
+              "bytes_read": 4522099,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 38834833,
+            "allocations": {
+              "allocation_calls": 7351,
+              "reallocation_calls": 2939,
+              "deallocation_calls": 7349,
+              "requested_bytes": 5624483,
+              "deallocated_bytes": 5307818
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 1071,
+              "metadata_calls": 928,
+              "successful_read_calls": 928,
+              "bytes_read": 4522099,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 36949500,
+            "allocations": {
+              "allocation_calls": 7351,
+              "reallocation_calls": 2939,
+              "deallocation_calls": 7349,
+              "requested_bytes": 5624483,
+              "deallocated_bytes": 5307818
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 1071,
+              "metadata_calls": 928,
+              "successful_read_calls": 928,
+              "bytes_read": 4522099,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 43068292,
+            "allocations": {
+              "allocation_calls": 7351,
+              "reallocation_calls": 2939,
+              "deallocation_calls": 7349,
+              "requested_bytes": 5624483,
+              "deallocated_bytes": 5307818
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 1071,
+              "metadata_calls": 928,
+              "successful_read_calls": 928,
+              "bytes_read": 4522099,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 37326000,
+            "allocations": {
+              "allocation_calls": 7351,
+              "reallocation_calls": 2939,
+              "deallocation_calls": 7349,
+              "requested_bytes": 5624483,
+              "deallocated_bytes": 5307818
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 1071,
+              "metadata_calls": 928,
+              "successful_read_calls": 928,
+              "bytes_read": 4522099,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 37792959,
+            "allocations": {
+              "allocation_calls": 7351,
+              "reallocation_calls": 2939,
+              "deallocation_calls": 7349,
+              "requested_bytes": 5624483,
+              "deallocated_bytes": 5307818
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 1071,
+              "metadata_calls": 928,
+              "successful_read_calls": 928,
+              "bytes_read": 4522099,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          }
+        ]
+      },
+      "shared": {
+        "operation": "one union discovery pass with one-file shared content residency",
+        "exact_io_per_iteration": {
+          "walk_passes": 1,
+          "walked_entries": 534,
+          "metadata_calls": 525,
+          "successful_read_calls": 525,
+          "bytes_read": 2719818,
+          "peak_retained_content_files": 1,
+          "peak_retained_content_bytes": 16384
+        },
+        "exact_io_stable_across_iterations": true,
+        "median_allocations": {
+          "allocation_calls": 3752,
+          "reallocation_calls": 1267,
+          "deallocation_calls": 3750,
+          "requested_bytes": 3233255,
+          "deallocated_bytes": 3087229
+        },
+        "median_elapsed_nanos": 23777750,
+        "raw_iterations": [
+          {
+            "elapsed_nanos": 23228208,
+            "allocations": {
+              "allocation_calls": 3752,
+              "reallocation_calls": 1267,
+              "deallocation_calls": 3750,
+              "requested_bytes": 3233255,
+              "deallocated_bytes": 3087229
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 534,
+              "metadata_calls": 525,
+              "successful_read_calls": 525,
+              "bytes_read": 2719818,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 22080208,
+            "allocations": {
+              "allocation_calls": 3752,
+              "reallocation_calls": 1267,
+              "deallocation_calls": 3750,
+              "requested_bytes": 3233255,
+              "deallocated_bytes": 3087229
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 534,
+              "metadata_calls": 525,
+              "successful_read_calls": 525,
+              "bytes_read": 2719818,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 23614959,
+            "allocations": {
+              "allocation_calls": 3752,
+              "reallocation_calls": 1267,
+              "deallocation_calls": 3750,
+              "requested_bytes": 3233255,
+              "deallocated_bytes": 3087229
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 534,
+              "metadata_calls": 525,
+              "successful_read_calls": 525,
+              "bytes_read": 2719818,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 22836375,
+            "allocations": {
+              "allocation_calls": 3752,
+              "reallocation_calls": 1267,
+              "deallocation_calls": 3750,
+              "requested_bytes": 3233255,
+              "deallocated_bytes": 3087229
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 534,
+              "metadata_calls": 525,
+              "successful_read_calls": 525,
+              "bytes_read": 2719818,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 26438084,
+            "allocations": {
+              "allocation_calls": 3752,
+              "reallocation_calls": 1267,
+              "deallocation_calls": 3750,
+              "requested_bytes": 3233255,
+              "deallocated_bytes": 3087229
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 534,
+              "metadata_calls": 525,
+              "successful_read_calls": 525,
+              "bytes_read": 2719818,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 24903417,
+            "allocations": {
+              "allocation_calls": 3752,
+              "reallocation_calls": 1267,
+              "deallocation_calls": 3750,
+              "requested_bytes": 3233255,
+              "deallocated_bytes": 3087229
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 534,
+              "metadata_calls": 525,
+              "successful_read_calls": 525,
+              "bytes_read": 2719818,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 25788458,
+            "allocations": {
+              "allocation_calls": 3752,
+              "reallocation_calls": 1267,
+              "deallocation_calls": 3750,
+              "requested_bytes": 3233255,
+              "deallocated_bytes": 3087229
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 534,
+              "metadata_calls": 525,
+              "successful_read_calls": 525,
+              "bytes_read": 2719818,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 24921250,
+            "allocations": {
+              "allocation_calls": 3752,
+              "reallocation_calls": 1267,
+              "deallocation_calls": 3750,
+              "requested_bytes": 3233255,
+              "deallocated_bytes": 3087229
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 534,
+              "metadata_calls": 525,
+              "successful_read_calls": 525,
+              "bytes_read": 2719818,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 23777750,
+            "allocations": {
+              "allocation_calls": 3752,
+              "reallocation_calls": 1267,
+              "deallocation_calls": 3750,
+              "requested_bytes": 3233255,
+              "deallocated_bytes": 3087229
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 534,
+              "metadata_calls": 525,
+              "successful_read_calls": 525,
+              "bytes_read": 2719818,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 16384
+            },
+            "output": {
+              "map": {
+                "documents": 403,
+                "logical_bytes": 1818661,
+                "digest_blake3": "8e77b306d920c333cf9b20b793ce81d6b0e194b306acc6c49b6bcba7fec6dcdf"
+              },
+              "regex": {
+                "documents": 502,
+                "logical_bytes": 2621477,
+                "digest_blake3": "a111681c0e0cb6160088539e357ebbbdea76806f167b413a9cb1fe987dc9a27e"
+              }
+            }
+          }
+        ]
+      },
+      "delta": {
+        "walk_passes": -1,
+        "successful_read_calls": -403,
+        "bytes_read": -1802281,
+        "allocation_calls_basis_points": -4895,
+        "requested_bytes_basis_points": -4251,
+        "median_elapsed_basis_points": -3708
+      }
+    },
+    {
+      "fixture": {
+        "name": "large-files",
+        "files_written": 111,
+        "bytes_written": 79741002,
+        "regular_source_files": 48,
+        "test_source_files": 12,
+        "regex_only_text_files": 24,
+        "oversize_source_files": 6,
+        "oversize_regex_only_files": 6,
+        "binary_files": 8
+      },
+      "output_parity_asserted": true,
+      "output": {
+        "map": {
+          "documents": 69,
+          "logical_bytes": 34619429,
+          "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+        },
+        "regex": {
+          "documents": 86,
+          "logical_bytes": 44040229,
+          "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+        }
+      },
+      "separate": {
+        "operation": "two independent discovery/read passes",
+        "exact_io_per_iteration": {
+          "walk_passes": 2,
+          "walked_entries": 239,
+          "metadata_calls": 178,
+          "successful_read_calls": 166,
+          "bytes_read": 82854003,
+          "peak_retained_content_files": 1,
+          "peak_retained_content_bytes": 2621440
+        },
+        "exact_io_stable_across_iterations": true,
+        "median_allocations": {
+          "allocation_calls": 2591,
+          "reallocation_calls": 936,
+          "deallocation_calls": 2589,
+          "requested_bytes": 83324045,
+          "deallocated_bytes": 83208408
+        },
+        "median_elapsed_nanos": 64918833,
+        "raw_iterations": [
+          {
+            "elapsed_nanos": 70351000,
+            "allocations": {
+              "allocation_calls": 2591,
+              "reallocation_calls": 936,
+              "deallocation_calls": 2589,
+              "requested_bytes": 83324045,
+              "deallocated_bytes": 83208408
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 239,
+              "metadata_calls": 178,
+              "successful_read_calls": 166,
+              "bytes_read": 82854003,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 64735958,
+            "allocations": {
+              "allocation_calls": 2591,
+              "reallocation_calls": 936,
+              "deallocation_calls": 2589,
+              "requested_bytes": 83324045,
+              "deallocated_bytes": 83208408
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 239,
+              "metadata_calls": 178,
+              "successful_read_calls": 166,
+              "bytes_read": 82854003,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 64918833,
+            "allocations": {
+              "allocation_calls": 2591,
+              "reallocation_calls": 936,
+              "deallocation_calls": 2589,
+              "requested_bytes": 83324045,
+              "deallocated_bytes": 83208408
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 239,
+              "metadata_calls": 178,
+              "successful_read_calls": 166,
+              "bytes_read": 82854003,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 64331417,
+            "allocations": {
+              "allocation_calls": 2591,
+              "reallocation_calls": 936,
+              "deallocation_calls": 2589,
+              "requested_bytes": 83324045,
+              "deallocated_bytes": 83208408
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 239,
+              "metadata_calls": 178,
+              "successful_read_calls": 166,
+              "bytes_read": 82854003,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 67639000,
+            "allocations": {
+              "allocation_calls": 2591,
+              "reallocation_calls": 936,
+              "deallocation_calls": 2589,
+              "requested_bytes": 83324045,
+              "deallocated_bytes": 83208408
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 239,
+              "metadata_calls": 178,
+              "successful_read_calls": 166,
+              "bytes_read": 82854003,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 62103750,
+            "allocations": {
+              "allocation_calls": 2591,
+              "reallocation_calls": 936,
+              "deallocation_calls": 2589,
+              "requested_bytes": 83324045,
+              "deallocated_bytes": 83208408
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 239,
+              "metadata_calls": 178,
+              "successful_read_calls": 166,
+              "bytes_read": 82854003,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 72032333,
+            "allocations": {
+              "allocation_calls": 2591,
+              "reallocation_calls": 936,
+              "deallocation_calls": 2589,
+              "requested_bytes": 83324045,
+              "deallocated_bytes": 83208408
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 239,
+              "metadata_calls": 178,
+              "successful_read_calls": 166,
+              "bytes_read": 82854003,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 64657917,
+            "allocations": {
+              "allocation_calls": 2591,
+              "reallocation_calls": 936,
+              "deallocation_calls": 2589,
+              "requested_bytes": 83324045,
+              "deallocated_bytes": 83208408
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 239,
+              "metadata_calls": 178,
+              "successful_read_calls": 166,
+              "bytes_read": 82854003,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 66565333,
+            "allocations": {
+              "allocation_calls": 2591,
+              "reallocation_calls": 936,
+              "deallocation_calls": 2589,
+              "requested_bytes": 83324045,
+              "deallocated_bytes": 83208408
+            },
+            "io": {
+              "walk_passes": 2,
+              "walked_entries": 239,
+              "metadata_calls": 178,
+              "successful_read_calls": 166,
+              "bytes_read": 82854003,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          }
+        ]
+      },
+      "shared": {
+        "operation": "one union discovery pass with one-file shared content residency",
+        "exact_io_per_iteration": {
+          "walk_passes": 1,
+          "walked_entries": 118,
+          "metadata_calls": 109,
+          "successful_read_calls": 103,
+          "bytes_read": 63979594,
+          "peak_retained_content_files": 1,
+          "peak_retained_content_bytes": 2621440
+        },
+        "exact_io_stable_across_iterations": true,
+        "median_allocations": {
+          "allocation_calls": 1331,
+          "reallocation_calls": 432,
+          "deallocation_calls": 1329,
+          "requested_bytes": 64205049,
+          "deallocated_bytes": 64150657
+        },
+        "median_elapsed_nanos": 58171250,
+        "raw_iterations": [
+          {
+            "elapsed_nanos": 60346083,
+            "allocations": {
+              "allocation_calls": 1331,
+              "reallocation_calls": 432,
+              "deallocation_calls": 1329,
+              "requested_bytes": 64205049,
+              "deallocated_bytes": 64150657
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 118,
+              "metadata_calls": 109,
+              "successful_read_calls": 103,
+              "bytes_read": 63979594,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 57487042,
+            "allocations": {
+              "allocation_calls": 1331,
+              "reallocation_calls": 432,
+              "deallocation_calls": 1329,
+              "requested_bytes": 64205049,
+              "deallocated_bytes": 64150657
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 118,
+              "metadata_calls": 109,
+              "successful_read_calls": 103,
+              "bytes_read": 63979594,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 55100917,
+            "allocations": {
+              "allocation_calls": 1331,
+              "reallocation_calls": 432,
+              "deallocation_calls": 1329,
+              "requested_bytes": 64205049,
+              "deallocated_bytes": 64150657
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 118,
+              "metadata_calls": 109,
+              "successful_read_calls": 103,
+              "bytes_read": 63979594,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 56658208,
+            "allocations": {
+              "allocation_calls": 1331,
+              "reallocation_calls": 432,
+              "deallocation_calls": 1329,
+              "requested_bytes": 64205049,
+              "deallocated_bytes": 64150657
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 118,
+              "metadata_calls": 109,
+              "successful_read_calls": 103,
+              "bytes_read": 63979594,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 58171250,
+            "allocations": {
+              "allocation_calls": 1331,
+              "reallocation_calls": 432,
+              "deallocation_calls": 1329,
+              "requested_bytes": 64205049,
+              "deallocated_bytes": 64150657
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 118,
+              "metadata_calls": 109,
+              "successful_read_calls": 103,
+              "bytes_read": 63979594,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 76063375,
+            "allocations": {
+              "allocation_calls": 1331,
+              "reallocation_calls": 432,
+              "deallocation_calls": 1329,
+              "requested_bytes": 64205049,
+              "deallocated_bytes": 64150657
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 118,
+              "metadata_calls": 109,
+              "successful_read_calls": 103,
+              "bytes_read": 63979594,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 52960291,
+            "allocations": {
+              "allocation_calls": 1331,
+              "reallocation_calls": 432,
+              "deallocation_calls": 1329,
+              "requested_bytes": 64205049,
+              "deallocated_bytes": 64150657
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 118,
+              "metadata_calls": 109,
+              "successful_read_calls": 103,
+              "bytes_read": 63979594,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 60824875,
+            "allocations": {
+              "allocation_calls": 1331,
+              "reallocation_calls": 432,
+              "deallocation_calls": 1329,
+              "requested_bytes": 64205049,
+              "deallocated_bytes": 64150657
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 118,
+              "metadata_calls": 109,
+              "successful_read_calls": 103,
+              "bytes_read": 63979594,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          },
+          {
+            "elapsed_nanos": 62168500,
+            "allocations": {
+              "allocation_calls": 1331,
+              "reallocation_calls": 432,
+              "deallocation_calls": 1329,
+              "requested_bytes": 64205049,
+              "deallocated_bytes": 64150657
+            },
+            "io": {
+              "walk_passes": 1,
+              "walked_entries": 118,
+              "metadata_calls": 109,
+              "successful_read_calls": 103,
+              "bytes_read": 63979594,
+              "peak_retained_content_files": 1,
+              "peak_retained_content_bytes": 2621440
+            },
+            "output": {
+              "map": {
+                "documents": 69,
+                "logical_bytes": 34619429,
+                "digest_blake3": "52408989d5f93c002fb59e0ad7e46cc4b820602892f56d13032a5006a9956fec"
+              },
+              "regex": {
+                "documents": 86,
+                "logical_bytes": 44040229,
+                "digest_blake3": "77284ee6ac7b3e03b1b72e6013475242d243be41ba13f8095ffb90e0f7a3e4d2"
+              }
+            }
+          }
+        ]
+      },
+      "delta": {
+        "walk_passes": -1,
+        "successful_read_calls": -63,
+        "bytes_read": -18874409,
+        "allocation_calls_basis_points": -4862,
+        "requested_bytes_basis_points": -2294,
+        "median_elapsed_basis_points": -1039
+      }
+    }
+  ]
+}

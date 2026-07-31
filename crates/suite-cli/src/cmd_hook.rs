@@ -4,10 +4,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
-use packet28_daemon_core::{
-    hook_runtime_config_path, now_unix, ActiveTaskRecord, BrokerAction, BrokerGetContextRequest,
-    HookBoundaryKind, HookEventKind, HookIngestRequest, HookRuntimeConfig,
+use packet28_daemon_core::storage::now_unix;
+use packet28_daemon_core::task_store_lease::acquire_task_store_writer_lease;
+use packet28_daemon_protocol::broker::{BrokerAction, BrokerGetContextRequest};
+use packet28_daemon_protocol::hooks::{
+    ActiveTaskRecord, HookBoundaryKind, HookEventKind, HookIngestRequest, HookRuntimeConfig,
 };
+use packet28_daemon_protocol::paths::hook_runtime_config_path;
 #[cfg(test)]
 use packet28_reducer_core::classify_command;
 use serde_json::{json, Value};
@@ -223,7 +226,7 @@ pub(crate) fn process_claude_hook_payload(
     payload: &Value,
     bootstrap_http_server: bool,
 ) -> Result<ClaudeHookOutcome> {
-    let runtime_config = load_hook_runtime_config(root);
+    let runtime_config = load_hook_runtime_config(root)?;
     let event_kind = event_override
         .map(|value| parse_event_kind(Some(value)))
         .unwrap_or_else(|| parse_event_kind(json_string(payload, "hook_event_name").as_deref()));
@@ -236,6 +239,7 @@ pub(crate) fn process_claude_hook_payload(
         ensure_hook_http_server(root, &runtime_config)?;
     }
     crate::broker_client::ensure_daemon(root)?;
+    let _writer_lease = acquire_task_store_writer_lease(root)?;
 
     let session_id = json_string(payload, "session_id");
     let task_id = resolve_task_id(root, payload, session_id.as_deref())?;
@@ -335,8 +339,9 @@ fn process_runtime_hook_payload(
     payload: Value,
 ) -> Result<RuntimeHookOutcome> {
     let root = resolve_runtime_hook_root(&args, &payload);
-    let runtime_config = load_hook_runtime_config(&root);
+    let runtime_config = load_hook_runtime_config(&root)?;
     crate::broker_client::ensure_daemon(&root)?;
+    let _writer_lease = acquire_task_store_writer_lease(&root)?;
 
     let event_kind = args
         .event
@@ -530,7 +535,7 @@ fn resolve_task_id(root: &Path, payload: &Value, session_id: Option<&str>) -> Re
         )?;
         return Ok(task_id);
     }
-    if let Some(active) = crate::task_runtime::load_active_task(root) {
+    if let Some(active) = crate::task_runtime::load_active_task(root)? {
         if session_id.is_none() || active.session_id.as_deref() == session_id {
             return Ok(active.task_id);
         }
@@ -567,7 +572,7 @@ fn resolve_runtime_task_id(
         )?;
         return Ok(task_id);
     }
-    if let Some(active) = crate::task_runtime::load_active_task(root) {
+    if let Some(active) = crate::task_runtime::load_active_task(root)? {
         return Ok(active.task_id);
     }
     let seed = match runtime {
@@ -660,7 +665,7 @@ fn hook_event_name(kind: HookEventKind) -> &'static str {
 fn render_hook_output(
     event_kind: HookEventKind,
     rewrite: Option<Value>,
-    response: &packet28_daemon_core::HookIngestResponse,
+    response: &packet28_daemon_protocol::hooks::HookIngestResponse,
     session_start_context: Option<String>,
     action_critic: &[String],
 ) -> Result<Option<String>> {
@@ -893,11 +898,21 @@ fn build_pretool_rewrite(
     Ok(Some(updated_input))
 }
 
-fn load_hook_runtime_config(root: &Path) -> HookRuntimeConfig {
-    fs::read_to_string(hook_runtime_config_path(root))
-        .ok()
-        .and_then(|raw| serde_json::from_str::<HookRuntimeConfig>(&raw).ok())
-        .unwrap_or_default()
+fn load_hook_runtime_config(root: &Path) -> Result<HookRuntimeConfig> {
+    let path = hook_runtime_config_path(root);
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            return Ok(HookRuntimeConfig::default());
+        }
+        Err(source) => {
+            return Err(source).with_context(|| {
+                format!("failed to read hook runtime config '{}'", path.display())
+            });
+        }
+    };
+    serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse hook runtime config '{}'", path.display()))
 }
 
 fn run_hook_rewrite(args: HookRewriteArgs) -> Result<i32> {
@@ -918,7 +933,7 @@ fn run_hook_rewrite(args: HookRewriteArgs) -> Result<i32> {
             );
         }
         HookRewriteCommand::Status(args) => {
-            let config = load_hook_runtime_config(&root);
+            let config = load_hook_runtime_config(&root)?;
             if args.json {
                 println!(
                     "{}",
@@ -946,7 +961,7 @@ fn run_hook_rewrite(args: HookRewriteArgs) -> Result<i32> {
 }
 
 fn set_hook_rewrite_enabled(root: &Path, enabled: bool) -> Result<()> {
-    let mut config = load_hook_runtime_config(root);
+    let mut config = load_hook_runtime_config(root)?;
     config.rewrite_enabled = enabled;
     write_hook_runtime_config(root, &config)
 }

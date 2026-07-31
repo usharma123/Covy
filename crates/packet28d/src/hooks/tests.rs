@@ -14,26 +14,45 @@ fn test_state() -> Arc<Mutex<DaemonState>> {
     let kernel = Arc::new(Kernel::with_v1_reducers_and_persistence(
         PersistConfig::new(root.clone()),
     ));
-    let (index_tx, index_rx) = mpsc::channel();
-    thread::spawn(move || while index_rx.recv().is_ok() {});
+    let kernel_registry = Arc::new(
+        crate::kernel_registry::PersistentKernelRegistry::new(&root, kernel.clone(), 4).unwrap(),
+    );
+    let (index_tx, index_rx) = IndexIngress::new();
+    thread::spawn(move || index_rx.discard_until_shutdown());
+    let (background_tx, mut background_rx) = tokio::sync::mpsc::channel(8);
+    thread::spawn(move || while background_rx.blocking_recv().is_some() {});
+    let (persistence_owner, persistence) = PersistenceOwner::start_for_test(
+        root.clone(),
+        Duration::from_millis(TASK_PERSISTENCE_DEBOUNCE_MS),
+    )
+    .unwrap();
     Arc::new(Mutex::new(DaemonState {
         root,
         kernel,
+        kernel_registry,
         runtime: DaemonRuntimeInfo::default(),
         tasks: TaskRegistry::default(),
+        task_generations: TaskGenerationRegistry::default(),
         agent_snapshots: BTreeMap::new(),
         watches: WatchRegistry::default(),
+        registry_instance_id: "test-registry-instance".to_string(),
+        registry_page_index: None,
         watcher_handles: HashMap::new(),
         subscribers: HashMap::new(),
         source_file_cache: BTreeMap::new(),
         interactive_index: InteractiveIndexRuntime::default(),
         index_tx,
+        background_tx,
+        persistence,
+        _persistence_owner: Some(persistence_owner),
+        shutdown: ShutdownSignal::new(),
+        changes: StateChangeSignal::new(),
         shutting_down: false,
     }))
 }
 
-fn packet(summary: &str) -> packet28_daemon_core::HookReducerPacket {
-    packet28_daemon_core::HookReducerPacket {
+fn packet(summary: &str) -> packet28_daemon_protocol::hooks::HookReducerPacket {
+    packet28_daemon_protocol::hooks::HookReducerPacket {
         packet_type: "packet28.hook.fs.v2".to_string(),
         tool_name: "Bash".to_string(),
         operation_kind: suite_packet_core::ToolOperationKind::Read,
@@ -66,6 +85,135 @@ fn packet(summary: &str) -> packet28_daemon_core::HookReducerPacket {
         raw_artifact_available: false,
         artifact: None,
     }
+}
+
+fn prepare_handoff_from_hooks(
+    state: Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    boundary_kind: HookBoundaryKind,
+    host_budget: Option<u64>,
+) -> Result<HookIngestResponse> {
+    let root = state.lock().map_err(lock_err)?.root.clone();
+    let config = load_hook_runtime_config(&root)?;
+    maybe_prepare_handoff_from_hooks(state, task_id, boundary_kind, host_budget, &config)
+}
+
+#[test]
+fn missing_hook_runtime_config_keeps_ingest_enabled_by_default() {
+    let state = test_state();
+
+    let response = hook_ingest(
+        state,
+        HookIngestRequest {
+            task_id: "task-missing-config".to_string(),
+            ..HookIngestRequest::default()
+        },
+    )
+    .unwrap();
+
+    assert!(response.accepted);
+}
+
+#[test]
+fn malformed_hook_runtime_config_rejects_ingest_without_state_or_byte_mutation() {
+    let state = test_state();
+    let root = state.lock().unwrap().root.clone();
+    let config_path = hook_runtime_config_path(&root);
+    let original = b"{\"hooks_enabled\": tru".to_vec();
+    fs::write(&config_path, &original).unwrap();
+    let before = serde_json::to_value(&state.lock().unwrap().tasks).unwrap();
+    let task_id = "task-malformed-config";
+
+    let error = hook_ingest(
+        state.clone(),
+        HookIngestRequest {
+            task_id: task_id.to_string(),
+            reducer_packet: Some(packet("must not be ingested")),
+            ..HookIngestRequest::default()
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("failed to parse hook runtime config"),
+        "{error:#}"
+    );
+    assert_eq!(
+        serde_json::to_value(&state.lock().unwrap().tasks).unwrap(),
+        before
+    );
+    assert_eq!(fs::read(config_path).unwrap(), original);
+    let storage_id = TaskStorageId::try_from(task_id).unwrap();
+    assert!(!task_artifact_dir(&root, &storage_id).exists());
+}
+
+#[test]
+fn unreadable_hook_runtime_config_rejects_ingest_without_state_mutation() {
+    let state = test_state();
+    let root = state.lock().unwrap().root.clone();
+    let config_path = hook_runtime_config_path(&root);
+    fs::create_dir(&config_path).unwrap();
+    let marker_path = config_path.join("preserve.bin");
+    let original = vec![0x00, 0xff, 0x7f];
+    fs::write(&marker_path, &original).unwrap();
+    let before = serde_json::to_value(&state.lock().unwrap().tasks).unwrap();
+
+    let error = hook_ingest(
+        state.clone(),
+        HookIngestRequest {
+            task_id: "task-unreadable-config".to_string(),
+            reducer_packet: Some(packet("must not be ingested")),
+            ..HookIngestRequest::default()
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("failed to read hook runtime config"),
+        "{error:#}"
+    );
+    assert_eq!(
+        serde_json::to_value(&state.lock().unwrap().tasks).unwrap(),
+        before
+    );
+    assert_eq!(fs::read(marker_path).unwrap(), original);
+    assert!(config_path.is_dir());
+}
+
+#[test]
+fn invalid_utf8_hook_runtime_config_rejects_handoff_without_state_or_byte_mutation() {
+    let state = test_state();
+    let root = state.lock().unwrap().root.clone();
+    let task_id = "task-invalid-utf8-handoff";
+    {
+        let mut guard = state.lock().unwrap();
+        let task = ensure_task_record_mut(&mut guard.tasks, task_id);
+        task.hook_window_est_tokens = 10;
+        task.hook_window_est_bytes = 40;
+    }
+    let before = serde_json::to_value(&state.lock().unwrap().tasks).unwrap();
+    let config_path = hook_runtime_config_path(&root);
+    let original = vec![b'{', b'}', 0xff];
+    fs::write(&config_path, &original).unwrap();
+
+    let error = prepare_handoff_from_hooks(state.clone(), task_id, HookBoundaryKind::Stop, None)
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("failed to read hook runtime config"),
+        "{error:#}"
+    );
+    assert_eq!(
+        serde_json::to_value(&state.lock().unwrap().tasks).unwrap(),
+        before
+    );
+    assert_eq!(fs::read(config_path).unwrap(), original);
 }
 
 #[test]
@@ -101,7 +249,7 @@ fn duplicate_cached_packet_does_not_grow_hook_window() {
 #[test]
 fn mutation_packets_are_never_cache_hits_or_cache_entries() {
     let state = test_state();
-    let mutation = packet28_daemon_core::HookReducerPacket {
+    let mutation = packet28_daemon_protocol::hooks::HookReducerPacket {
         reducer_family: Some("infra".to_string()),
         canonical_command_kind: Some("kubectl_apply".to_string()),
         summary: "deployment.apps/api configured".to_string(),
@@ -141,7 +289,7 @@ fn mutation_packets_are_never_cache_hits_or_cache_entries() {
 #[test]
 fn infra_mutation_busts_cached_infra_reads() {
     let state = test_state();
-    let read = packet28_daemon_core::HookReducerPacket {
+    let read = packet28_daemon_protocol::hooks::HookReducerPacket {
         reducer_family: Some("infra".to_string()),
         canonical_command_kind: Some("docker_ps".to_string()),
         summary: "docker ps listed 1 container(s)".to_string(),
@@ -172,7 +320,7 @@ fn infra_mutation_busts_cached_infra_reads() {
     .unwrap();
     assert!(cached.cache_hit);
 
-    let mutation = packet28_daemon_core::HookReducerPacket {
+    let mutation = packet28_daemon_protocol::hooks::HookReducerPacket {
         reducer_family: Some("infra".to_string()),
         canonical_command_kind: Some("docker_run".to_string()),
         summary: "docker run completed".to_string(),
@@ -207,7 +355,7 @@ fn infra_mutation_busts_cached_infra_reads() {
 #[test]
 fn remote_state_cache_entries_expire() {
     let state = test_state();
-    let read = packet28_daemon_core::HookReducerPacket {
+    let read = packet28_daemon_protocol::hooks::HookReducerPacket {
         reducer_family: Some("infra".to_string()),
         canonical_command_kind: Some("aws_sts_get_caller_identity".to_string()),
         summary: "aws caller arn:aws:iam::123:user/demo".to_string(),
@@ -274,7 +422,7 @@ fn edit_invalidation_busts_fs_cache() {
         state.clone(),
         HookIngestRequest {
             task_id: "task-edit".to_string(),
-            reducer_packet: Some(packet28_daemon_core::HookReducerPacket {
+            reducer_packet: Some(packet28_daemon_protocol::hooks::HookReducerPacket {
                 packet_type: "packet28.hook.edit.v1".to_string(),
                 tool_name: "Edit".to_string(),
                 operation_kind: suite_packet_core::ToolOperationKind::Edit,
@@ -313,7 +461,7 @@ fn edit_invalidation_busts_fs_cache() {
     .unwrap();
 
     let after_edit = hook_ingest(
-        state.clone(),
+        state,
         HookIngestRequest {
             task_id: "task-edit".to_string(),
             reducer_packet: Some(packet("first read")),
@@ -351,7 +499,7 @@ fn failed_edit_does_not_bust_fs_cache() {
         state.clone(),
         HookIngestRequest {
             task_id: "task-failed-edit".to_string(),
-            reducer_packet: Some(packet28_daemon_core::HookReducerPacket {
+            reducer_packet: Some(packet28_daemon_protocol::hooks::HookReducerPacket {
                 packet_type: "packet28.hook.edit.failure.v1".to_string(),
                 tool_name: "Edit".to_string(),
                 operation_kind: suite_packet_core::ToolOperationKind::Edit,
@@ -404,7 +552,7 @@ fn failed_edit_does_not_bust_fs_cache() {
 #[test]
 fn edit_invalidation_busts_git_cache() {
     let state = test_state();
-    let git_packet = packet28_daemon_core::HookReducerPacket {
+    let git_packet = packet28_daemon_protocol::hooks::HookReducerPacket {
         packet_type: "packet28.hook.git.v2".to_string(),
         tool_name: "Bash".to_string(),
         operation_kind: suite_packet_core::ToolOperationKind::Git,
@@ -465,7 +613,7 @@ fn edit_invalidation_busts_git_cache() {
         state.clone(),
         HookIngestRequest {
             task_id: "task-git-edit".to_string(),
-            reducer_packet: Some(packet28_daemon_core::HookReducerPacket {
+            reducer_packet: Some(packet28_daemon_protocol::hooks::HookReducerPacket {
                 packet_type: "packet28.hook.edit.v1".to_string(),
                 tool_name: "Edit".to_string(),
                 operation_kind: suite_packet_core::ToolOperationKind::Edit,
@@ -539,7 +687,7 @@ fn successful_handoff_preparation_clears_hook_window() {
     )
     .unwrap();
 
-    let response = maybe_prepare_handoff_from_hooks(
+    let response = prepare_handoff_from_hooks(
         state.clone(),
         "task-handoff-reset",
         HookBoundaryKind::Stop,
@@ -621,7 +769,7 @@ fn threshold_accumulation_triggers_exceeded_without_stop_boundary() {
         force_threshold_fraction: 0.9,
         ..HookRuntimeConfig::default()
     };
-    let config_path = packet28_daemon_core::hook_runtime_config_path(&root);
+    let config_path = packet28_daemon_protocol::paths::hook_runtime_config_path(&root);
     std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
     // Ingest packets totaling 80 tokens (above prepare=75 threshold).
@@ -645,7 +793,7 @@ fn threshold_accumulation_triggers_exceeded_without_stop_boundary() {
     assert!(task.hook_threshold_exceeded);
 
     // Without intention, stop should be blocked.
-    let response = maybe_prepare_handoff_from_hooks(
+    let response = prepare_handoff_from_hooks(
         state.clone(),
         "task-threshold",
         HookBoundaryKind::Stop,
@@ -669,7 +817,7 @@ fn threshold_accumulation_triggers_exceeded_without_stop_boundary() {
     .unwrap();
 
     // Now at Stop boundary with intention → handoff should be ready.
-    let response = maybe_prepare_handoff_from_hooks(
+    let response = prepare_handoff_from_hooks(
         state.clone(),
         "task-threshold",
         HookBoundaryKind::Stop,
@@ -699,7 +847,7 @@ fn threshold_level_returned_in_response() {
         force_threshold_fraction: 0.9,
         ..HookRuntimeConfig::default()
     };
-    let config_path = packet28_daemon_core::hook_runtime_config_path(&root);
+    let config_path = packet28_daemon_protocol::paths::hook_runtime_config_path(&root);
     std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
     // Under warn threshold.
@@ -737,7 +885,7 @@ fn threshold_level_returned_in_response() {
     pkt3.est_tokens = 30;
     pkt3.cache_fingerprint = Some("unique-level-3".to_string());
     let response = hook_ingest(
-        state.clone(),
+        state,
         HookIngestRequest {
             task_id: "task-level".to_string(),
             reducer_packet: Some(pkt3),
@@ -796,7 +944,7 @@ fn relaunch_requested_when_daemon_managed_with_command() {
         relaunch_command: vec!["true".to_string()],
         ..HookRuntimeConfig::default()
     };
-    let config_path = packet28_daemon_core::hook_runtime_config_path(&root);
+    let config_path = packet28_daemon_protocol::paths::hook_runtime_config_path(&root);
     std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
     // Ingest enough to exceed threshold.
@@ -827,13 +975,8 @@ fn relaunch_requested_when_daemon_managed_with_command() {
     .unwrap();
 
     // Stop boundary should trigger handoff + relaunch.
-    let response = maybe_prepare_handoff_from_hooks(
-        state.clone(),
-        "task-relaunch",
-        HookBoundaryKind::Stop,
-        None,
-    )
-    .unwrap();
+    let response =
+        prepare_handoff_from_hooks(state, "task-relaunch", HookBoundaryKind::Stop, None).unwrap();
     assert!(response.handoff_ready);
     assert!(response.relaunch_requested);
     assert_eq!(
@@ -857,7 +1000,7 @@ fn e2e_hook_threshold_handoff_cycle() {
         relaunch_command: vec!["true".to_string()],
         ..HookRuntimeConfig::default()
     };
-    let config_path = packet28_daemon_core::hook_runtime_config_path(&root);
+    let config_path = packet28_daemon_protocol::paths::hook_runtime_config_path(&root);
     std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
     let task_id = "task-e2e-cycle";
@@ -911,8 +1054,7 @@ fn e2e_hook_threshold_handoff_cycle() {
 
     // Phase 2: Stop without intention → blocked.
     let blocked =
-        maybe_prepare_handoff_from_hooks(state.clone(), task_id, HookBoundaryKind::Stop, None)
-            .unwrap();
+        prepare_handoff_from_hooks(state.clone(), task_id, HookBoundaryKind::Stop, None).unwrap();
     assert!(blocked.block_stop);
     assert!(!blocked.handoff_ready);
 
@@ -931,8 +1073,7 @@ fn e2e_hook_threshold_handoff_cycle() {
 
     // Phase 4: Stop with intention → handoff fires, relaunch queued.
     let handoff =
-        maybe_prepare_handoff_from_hooks(state.clone(), task_id, HookBoundaryKind::Stop, None)
-            .unwrap();
+        prepare_handoff_from_hooks(state.clone(), task_id, HookBoundaryKind::Stop, None).unwrap();
     assert!(handoff.handoff_ready);
     assert!(handoff.relaunch_requested);
     assert_eq!(
@@ -948,7 +1089,8 @@ fn e2e_hook_threshold_handoff_cycle() {
     assert!(!task.hook_threshold_exceeded);
 
     // Phase 6: Verify brief artifact was persisted.
-    let brief_path = crate::task_brief_markdown_path(&root, task_id);
+    let storage_id = crate::TaskStorageId::try_from(task_id).unwrap();
+    let brief_path = crate::task_brief_markdown_path(&root, &storage_id);
     assert!(
         brief_path.exists(),
         "brief.md should be written after handoff"
@@ -967,7 +1109,7 @@ fn relaunch_not_requested_when_host_managed() {
         relaunch_command: vec!["true".to_string()],
         ..HookRuntimeConfig::default()
     };
-    let config_path = packet28_daemon_core::hook_runtime_config_path(&root);
+    let config_path = packet28_daemon_protocol::paths::hook_runtime_config_path(&root);
     std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
     let mut pkt = packet("big read");
@@ -995,13 +1137,9 @@ fn relaunch_not_requested_when_host_managed() {
     )
     .unwrap();
 
-    let response = maybe_prepare_handoff_from_hooks(
-        state.clone(),
-        "task-host-managed",
-        HookBoundaryKind::Stop,
-        None,
-    )
-    .unwrap();
+    let response =
+        prepare_handoff_from_hooks(state, "task-host-managed", HookBoundaryKind::Stop, None)
+            .unwrap();
     assert!(response.handoff_ready);
     assert!(!response.relaunch_requested);
     assert_eq!(

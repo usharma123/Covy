@@ -1,24 +1,14 @@
 use super::*;
-use packet28_daemon_core::{DaemonIndexManifest, DaemonIndexStatusResponse};
+use packet28_daemon_protocol::hooks::HookRuntimeConfig;
+use packet28_daemon_protocol::index::{DaemonIndexManifest, DaemonIndexStatusResponse};
 use tempfile::tempdir;
 
 fn runtime(name: &'static str, slug: &'static str, detected: bool, has_mcp: bool) -> RuntimeInfo {
+    let adapter = crate::runtime_integrations::adapter_for_slug(slug)
+        .unwrap_or_else(|| panic!("unknown runtime slug: {slug}"));
+    assert_eq!(adapter.name, name);
     RuntimeInfo {
-        kind: match slug {
-            "claude" => RuntimeKind::Claude,
-            "cursor" => RuntimeKind::Cursor,
-            "codex" => RuntimeKind::Codex,
-            "windsurf" => RuntimeKind::Windsurf,
-            "copilot" => RuntimeKind::Copilot,
-            "gemini" => RuntimeKind::Gemini,
-            "opencode" => RuntimeKind::OpenCode,
-            "hermes" => RuntimeKind::Hermes,
-            "cline" => RuntimeKind::Cline,
-            "roo" => RuntimeKind::Roo,
-            "kilocode" => RuntimeKind::KiloCode,
-            "antigravity" => RuntimeKind::Antigravity,
-            other => panic!("unknown runtime slug: {other}"),
-        },
+        adapter,
         name,
         slug,
         prompt_targets: has_mcp
@@ -128,7 +118,11 @@ fn explicit_setup_choice_maps_runtime_override_to_custom_single_scope() {
 #[test]
 fn detect_runtimes_includes_instruction_only_parity_targets() {
     let root = tempdir().unwrap();
-    let runtimes = detect_runtimes(root.path());
+    let command_exists = |_name: &str| false;
+    let run_command = |_name: &str, _args: &[String]| Ok(false);
+    let environment =
+        RuntimeEnvironment::new(root.path(), root.path(), &command_exists, &run_command);
+    let runtimes = detect_runtimes(&environment);
     let by_slug = runtimes
         .iter()
         .map(|runtime| (runtime.slug, runtime))
@@ -165,18 +159,18 @@ fn detect_runtimes_includes_instruction_only_parity_targets() {
             .join("antigravity-packet28-rules.md")
     );
 
-    assert!(!runtime_supports_mcp(by_slug["copilot"].kind));
-    assert!(runtime_supports_hooks(by_slug["copilot"].kind));
-    assert!(!runtime_supports_mcp(by_slug["gemini"].kind));
-    assert!(runtime_supports_hooks(by_slug["gemini"].kind));
-    assert!(!runtime_supports_mcp(by_slug["opencode"].kind));
-    assert!(runtime_supports_hooks(by_slug["opencode"].kind));
-    assert!(!runtime_supports_mcp(by_slug["hermes"].kind));
-    assert!(runtime_supports_hooks(by_slug["hermes"].kind));
+    assert!(by_slug["copilot"].adapter.mcp.is_none());
+    assert!(by_slug["copilot"].adapter.hooks.is_some());
+    assert!(by_slug["gemini"].adapter.mcp.is_none());
+    assert!(by_slug["gemini"].adapter.hooks.is_some());
+    assert!(by_slug["opencode"].adapter.mcp.is_none());
+    assert!(by_slug["opencode"].adapter.hooks.is_some());
+    assert!(by_slug["hermes"].adapter.mcp.is_none());
+    assert!(by_slug["hermes"].adapter.hooks.is_some());
 
     for slug in ["cline", "roo", "kilocode", "antigravity"] {
-        assert!(!runtime_supports_mcp(by_slug[slug].kind));
-        assert!(!runtime_supports_hooks(by_slug[slug].kind));
+        assert!(by_slug[slug].adapter.mcp.is_none());
+        assert!(by_slug[slug].adapter.hooks.is_none());
     }
 }
 
@@ -184,7 +178,7 @@ fn detect_runtimes_includes_instruction_only_parity_targets() {
 fn write_claude_hook_config_installs_packet28_hooks() {
     let dir = tempdir().unwrap();
     let path = dir.path().join(".claude").join("settings.json");
-    let status = write_claude_hook_config(&path, dir.path(), true).unwrap();
+    let status = setup_hooks::write_claude_hook_config(&path, dir.path(), true).unwrap();
     assert!(matches!(status, McpConfigStatus::Written));
     let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     // Hooks should be at top-level event keys, not nested under "packet28".
@@ -269,7 +263,7 @@ fn write_claude_hook_config_replaces_legacy_command_hooks() {
     )
     .unwrap();
 
-    let status = write_claude_hook_config(&path, dir.path(), true).unwrap();
+    let status = setup_hooks::write_claude_hook_config(&path, dir.path(), true).unwrap();
     assert!(matches!(status, McpConfigStatus::Written));
     let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     let entries = value["hooks"]["PreToolUse"].as_array().unwrap();
@@ -302,7 +296,7 @@ fn write_claude_hook_config_removes_stale_packet28_command_paths() {
         )
         .unwrap();
 
-    let status = write_claude_hook_config(&path, dir.path(), true).unwrap();
+    let status = setup_hooks::write_claude_hook_config(&path, dir.path(), true).unwrap();
     assert!(matches!(status, McpConfigStatus::Written));
 
     let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -325,7 +319,7 @@ fn write_claude_hook_config_removes_stale_packet28_command_paths() {
 fn write_cursor_hook_config_installs_packet28_hooks() {
     let dir = tempdir().unwrap();
     let path = dir.path().join(".cursor").join("hooks.json");
-    let status = write_cursor_hook_config(&path, dir.path(), true).unwrap();
+    let status = setup_hooks::write_cursor_hook_config(&path, dir.path(), true).unwrap();
     assert!(matches!(status, McpConfigStatus::Written));
     let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     assert!(value["hooks"]["beforeSubmitPrompt"].is_array());
@@ -338,7 +332,7 @@ fn write_cursor_hook_config_installs_packet28_hooks() {
 fn write_gemini_hook_config_installs_packet28_before_tool_hook() {
     let dir = tempdir().unwrap();
     let path = dir.path().join(".gemini").join("settings.json");
-    let status = write_gemini_hook_config(&path, dir.path(), true).unwrap();
+    let status = setup_hooks::write_gemini_hook_config(&path, dir.path(), true).unwrap();
     assert!(matches!(status, McpConfigStatus::Written));
     let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     let hooks = value["hooks"]["BeforeTool"].as_array().unwrap();
@@ -356,7 +350,7 @@ fn write_copilot_hook_config_installs_packet28_pretool_hook() {
         .join(".github")
         .join("hooks")
         .join("packet28-rewrite.json");
-    let status = write_copilot_hook_config(&path, dir.path(), true).unwrap();
+    let status = setup_hooks::write_copilot_hook_config(&path, dir.path(), true).unwrap();
     assert!(matches!(status, McpConfigStatus::Written));
     let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     let hooks = value["hooks"]["PreToolUse"].as_array().unwrap();
@@ -376,14 +370,14 @@ fn write_opencode_plugin_installs_packet28_rewrite_plugin() {
         .join("opencode")
         .join("plugins")
         .join("packet28.ts");
-    let status = write_opencode_plugin(&path, true).unwrap();
+    let status = setup_plugins::write_opencode_plugin(&path, true).unwrap();
     assert!(matches!(status, McpConfigStatus::Written));
     let content = fs::read_to_string(&path).unwrap();
     assert!(content.contains("Packet28 rewrite"));
     assert!(content.contains("tool.execute.before"));
     assert!(content.contains("args as Record<string, unknown>).command = rewritten"));
 
-    let status = write_opencode_plugin(&path, true).unwrap();
+    let status = setup_plugins::write_opencode_plugin(&path, true).unwrap();
     assert!(matches!(status, McpConfigStatus::AlreadyConfigured));
 }
 
@@ -404,7 +398,7 @@ fn opencode_plugin_smoke_rewrites_and_passes_through_empty_stdout() {
         .join("opencode")
         .join("plugins")
         .join("packet28.ts");
-    write_opencode_plugin(&path, true).unwrap();
+    setup_plugins::write_opencode_plugin(&path, true).unwrap();
     let script = r#"
 const fs = require("fs")
 let code = fs.readFileSync(process.argv[1], "utf8")
@@ -458,18 +452,19 @@ eval(code)
 #[test]
 fn write_hermes_plugin_installs_plugin_and_enables_config() {
     let dir = tempdir().unwrap();
-    let status = write_hermes_plugin(dir.path(), true).unwrap();
+    let status = setup_plugins::write_hermes_plugin(dir.path(), true).unwrap();
     assert!(matches!(status, McpConfigStatus::Written));
 
-    let plugin_dir = hermes::plugin_dir(dir.path());
+    let plugin_dir = crate::runtime_integrations::hermes::plugin_dir(dir.path());
     let init = fs::read_to_string(plugin_dir.join("__init__.py")).unwrap();
     let manifest = fs::read_to_string(plugin_dir.join("plugin.yaml")).unwrap();
-    let config = fs::read_to_string(hermes::config_path(dir.path())).unwrap();
+    let config =
+        fs::read_to_string(crate::runtime_integrations::hermes::config_path(dir.path())).unwrap();
     assert!(init.contains("Packet28 rewrite"));
     assert!(manifest.contains("packet28-rewrite"));
-    assert!(hermes_config_enables_packet28(&config).unwrap());
+    assert!(setup_plugins::hermes_config_enables_packet28(&config).unwrap());
 
-    let status = write_hermes_plugin(dir.path(), true).unwrap();
+    let status = setup_plugins::write_hermes_plugin(dir.path(), true).unwrap();
     assert!(matches!(status, McpConfigStatus::AlreadyConfigured));
 }
 
@@ -485,8 +480,8 @@ fn hermes_plugin_smoke_rewrites_and_passes_through_empty_stdout() {
     }
 
     let dir = tempdir().unwrap();
-    write_hermes_plugin(dir.path(), true).unwrap();
-    let init = hermes::plugin_dir(dir.path()).join("__init__.py");
+    setup_plugins::write_hermes_plugin(dir.path(), true).unwrap();
+    let init = crate::runtime_integrations::hermes::plugin_dir(dir.path()).join("__init__.py");
     let script = r#"
 import importlib.util
 import subprocess
@@ -531,7 +526,7 @@ print(passthrough_args["command"])
 
 #[test]
 fn patch_hermes_config_preserves_existing_enabled_plugins() {
-    let config = patch_hermes_config(
+    let config = setup_plugins::patch_hermes_config(
         r#"
 theme: dark
 plugins:
@@ -541,14 +536,49 @@ plugins:
     )
     .unwrap();
     assert!(config.contains("existing-plugin"));
-    assert!(hermes_config_enables_packet28(&config).unwrap());
+    assert!(setup_plugins::hermes_config_enables_packet28(&config).unwrap());
+}
+
+#[test]
+fn patch_hermes_config_preserves_order_tags_and_unknown_keys() {
+    let original = r#"
+theme: dark
+workspace: !Packet28
+  id: !!str 001
+plugins:
+  search_path: ./plugins
+  enabled:
+    - existing-plugin
+mode: on
+"#;
+    let before = yaml_serde::from_str::<yaml_serde::Value>(original).unwrap();
+
+    let patched = setup_plugins::patch_hermes_config(original).unwrap();
+    let after = yaml_serde::from_str::<yaml_serde::Value>(&patched).unwrap();
+
+    assert_eq!(after["workspace"], before["workspace"]);
+    assert_eq!(
+        after["plugins"]["search_path"],
+        before["plugins"]["search_path"]
+    );
+    assert_eq!(after["mode"], before["mode"]);
+    assert_eq!(
+        after
+            .as_mapping()
+            .unwrap()
+            .keys()
+            .filter_map(yaml_serde::Value::as_str)
+            .collect::<Vec<_>>(),
+        ["theme", "workspace", "plugins", "mode"]
+    );
+    assert!(setup_plugins::hermes_config_enables_packet28(&patched).unwrap());
 }
 
 #[test]
 fn write_windsurf_hook_config_installs_packet28_hooks() {
     let dir = tempdir().unwrap();
     let path = dir.path().join(".windsurf").join("hooks.json");
-    let status = write_windsurf_hook_config(&path, dir.path(), true).unwrap();
+    let status = setup_hooks::write_windsurf_hook_config(&path, dir.path(), true).unwrap();
     assert!(matches!(status, McpConfigStatus::Written));
     let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     assert!(value["hooks"]["pre_user_prompt"].is_array());
@@ -559,10 +589,10 @@ fn write_windsurf_hook_config_installs_packet28_hooks() {
 
 #[test]
 fn generated_relaunch_is_disabled_when_packet28_agent_is_missing() {
-    let mut config = packet28_daemon_core::HookRuntimeConfig {
+    let mut config = HookRuntimeConfig {
         relaunch_preference: RelaunchPreference::DaemonManaged,
         relaunch_command: generated_relaunch_command(),
-        ..packet28_daemon_core::HookRuntimeConfig::default()
+        ..HookRuntimeConfig::default()
     };
     let changed = apply_generated_relaunch_command(&mut config, Path::new("/tmp/repo"), None);
     assert!(changed);
@@ -573,10 +603,10 @@ fn generated_relaunch_is_disabled_when_packet28_agent_is_missing() {
 #[test]
 fn generated_relaunch_preserves_custom_commands() {
     let original = vec!["custom-agent-runner".to_string(), "--resume".to_string()];
-    let mut config = packet28_daemon_core::HookRuntimeConfig {
+    let mut config = HookRuntimeConfig {
         relaunch_preference: RelaunchPreference::DaemonManaged,
         relaunch_command: original.clone(),
-        ..packet28_daemon_core::HookRuntimeConfig::default()
+        ..HookRuntimeConfig::default()
     };
     let changed = apply_generated_relaunch_command(&mut config, Path::new("/tmp/repo"), None);
     assert!(!changed);
@@ -585,7 +615,7 @@ fn generated_relaunch_preserves_custom_commands() {
 
 #[test]
 fn generated_relaunch_launches_delegated_runtime_directly() {
-    let mut config = packet28_daemon_core::HookRuntimeConfig::default();
+    let mut config = HookRuntimeConfig::default();
     let changed = apply_generated_relaunch_command(
         &mut config,
         Path::new("/tmp/repo"),
@@ -604,7 +634,7 @@ fn generated_relaunch_launches_delegated_runtime_directly() {
 
 #[test]
 fn legacy_packet28_agent_relaunch_is_migrated_to_direct_runtime() {
-    let mut config = packet28_daemon_core::HookRuntimeConfig {
+    let mut config = HookRuntimeConfig {
         relaunch_preference: RelaunchPreference::DaemonManaged,
         relaunch_command: vec![
             "/usr/local/bin/packet28-agent".to_string(),
@@ -615,7 +645,7 @@ fn legacy_packet28_agent_relaunch_is_migrated_to_direct_runtime() {
             "claude".to_string(),
             "--continue".to_string(),
         ],
-        ..packet28_daemon_core::HookRuntimeConfig::default()
+        ..HookRuntimeConfig::default()
     };
 
     let changed = apply_generated_relaunch_command(
@@ -635,7 +665,7 @@ fn setup_index_status(
 ) -> DaemonIndexStatusResponse {
     DaemonIndexStatusResponse {
         manifest: DaemonIndexManifest {
-            status: status.to_string(),
+            status: status.parse().unwrap(),
             generation: 7,
             regex_generation: regex_status.map(|_| 7),
             regex_status: regex_status.map(str::to_string),

@@ -6,6 +6,12 @@ mod daemon_task_core;
 mod daemon_task_mcp;
 #[path = "support/daemon_task_seed.rs"]
 mod daemon_task_seed;
+#[expect(
+    dead_code,
+    reason = "shared integration harness APIs are exercised by sibling test binaries"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use predicates::prelude::*;
 use serde_json::json;
@@ -16,7 +22,8 @@ use daemon_task_await::{
 };
 use daemon_task_core::{ensure_packet28d_built, suite_cmd};
 use daemon_task_mcp::{
-    initialize_mcp_session, run_claude_hook, start_mcp_server, write_intention_via_mcp,
+    initialize_mcp_session, run_claude_hook, start_mcp_server, stop_mcp_server,
+    write_intention_via_mcp,
 };
 
 #[test]
@@ -40,8 +47,8 @@ fn test_daemon_task_cli_await_handoff_can_require_newer_context_version() {
     ensure_packet28d_built();
     let dir =
         repo_with_checkpointed_handoff("task-daemon-newer-handoff", "Prepare initial handoff");
-    let (mut child, mut stdin, mut stdout) = start_mcp_server(dir.path());
-    initialize_mcp_session(&mut stdin, &mut stdout);
+    let mut server = start_mcp_server(dir.path());
+    initialize_mcp_session(&mut server);
 
     let launch_value = launch_agent_for_bootstrap_mode(dir.path(), "task-daemon-newer-handoff");
     let launched_status = task_status(dir.path(), "task-daemon-newer-handoff");
@@ -74,16 +81,14 @@ fn test_daemon_task_cli_await_handoff_can_require_newer_context_version() {
         ));
 
     let _ = write_intention_via_mcp(
-        &mut stdin,
-        &mut stdout,
+        &mut server,
         4,
         "task-daemon-newer-handoff",
         "Resume from a newer handoff",
         "editing",
         &["src/beta.rs"],
     );
-    child.kill().unwrap();
-    child.wait().unwrap();
+    stop_mcp_server(server);
     let (status, _) = run_claude_hook(
         dir.path(),
         &json!({

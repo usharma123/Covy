@@ -1,3 +1,10 @@
+#[expect(
+    dead_code,
+    reason = "shared integration harness APIs are exercised by sibling test binaries"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 use serde_json::json;
@@ -75,11 +82,7 @@ fn test_gain_warns_about_disabled_bypass_sessions_like_rtk() {
 #[test]
 fn test_gain_cc_economics_merges_ccusage_and_packet28_savings() {
     let root = TempDir::new().unwrap();
-    std::process::Command::new("git")
-        .args(["init"])
-        .current_dir(root.path())
-        .status()
-        .unwrap();
+    process_harness::run_git(root.path(), &["init"]);
     fs::write(root.path().join("tracked.txt"), "changed\n").unwrap();
 
     suite_cmd()

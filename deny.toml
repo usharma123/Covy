@@ -13,6 +13,10 @@ allow = [
   "Unicode-3.0",
   "MPL-2.0",
   "Zlib",
+  # notify's file-watching backend includes public-domain CC0 material.
+  "CC0-1.0",
+  # webpki-roots distributes Mozilla's CA data under this permissive data license.
+  "CDLA-Permissive-2.0",
 ]
 
 [bans]

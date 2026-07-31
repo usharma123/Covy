@@ -1,4 +1,5 @@
 use super::*;
+use crate::broker::estimate_text_cost;
 
 pub(crate) fn normalize_plan_steps(steps: &[BrokerPlanStep]) -> Vec<BrokerPlanStep> {
     steps
@@ -191,17 +192,17 @@ pub(crate) fn current_deleted_paths(root: &Path) -> HashSet<String> {
 }
 
 pub(crate) fn merged_unique(current: &[String], requested: &[String]) -> Vec<String> {
+    merged_unique_many([current, requested])
+}
+
+pub(crate) fn merged_unique_many<const N: usize>(groups: [&[String]; N]) -> Vec<String> {
     let mut values = std::collections::BTreeSet::new();
-    for value in current {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            values.insert(trimmed.to_string());
-        }
-    }
-    for value in requested {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            values.insert(trimmed.to_string());
+    for group in groups {
+        for value in group {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                values.insert(trimmed.to_string());
+            }
         }
     }
     values.into_iter().collect()

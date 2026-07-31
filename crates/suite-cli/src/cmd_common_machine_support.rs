@@ -711,9 +711,9 @@ pub fn cache_summary_line(metadata: &Value) -> Option<String> {
             age.unwrap_or_default()
         ))
     } else if let Some(reason) = miss_reason {
-        Some(format!("cache: miss key={} reason={}", key, reason))
+        Some(format!("cache: miss key={key} reason={reason}"))
     } else {
-        Some(format!("cache: miss key={}", key))
+        Some(format!("cache: miss key={key}"))
     }
 }
 
@@ -889,7 +889,7 @@ mod tests {
         }
         .with_canonical_hash_and_real_budget();
 
-        let wrapper = PacketWrapperV1::new("proxy.run".to_string(), envelope.clone());
+        let wrapper = PacketWrapperV1::new("proxy.run".to_string(), envelope);
         let mut packet = serde_json::to_value(&wrapper.packet).unwrap();
         compact_packet_payload(suite_packet_core::PACKET_TYPE_PROXY_RUN, &mut packet);
         assert!(packet

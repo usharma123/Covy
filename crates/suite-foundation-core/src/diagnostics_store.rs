@@ -50,7 +50,7 @@ pub fn serialize_diagnostics_with_metadata(
     let mut blocks: Vec<(String, Vec<u8>)> = Vec::with_capacity(data.issues_by_file.len());
     for (path, issues) in &data.issues_by_file {
         let stored: Vec<StoredIssue> = issues.iter().map(stored_issue_from_runtime).collect();
-        let bytes = bincode::serialize(&stored)
+        let bytes = wincode::serialize(&stored)
             .map_err(|e| CovyError::Cache(format!("Failed to serialize diagnostics block: {e}")))?;
         blocks.push((path.clone(), bytes));
     }
@@ -118,7 +118,7 @@ pub fn deserialize_diagnostics_with_metadata(
     }
 
     // Legacy fallback
-    let stored: StoredDiagnosticsData = bincode::deserialize(data)
+    let stored: StoredDiagnosticsData = wincode::deserialize(data)
         .map_err(|e| CovyError::Cache(format!("Failed to deserialize diagnostics: {e}")))?;
     Ok((stored.into_runtime(), None))
 }
@@ -199,36 +199,15 @@ fn parse_diagnostics_state(data: &[u8]) -> Result<DiagnosticsState, CovyError> {
     };
 
     let read_u16 = |buf: &[u8], pos: &mut usize| -> Result<u16, CovyError> {
-        if *pos + 2 > buf.len() {
-            return Err(CovyError::Cache(
-                "unexpected EOF while reading u16".to_string(),
-            ));
-        }
-        let v = u16::from_le_bytes(buf[*pos..*pos + 2].try_into().unwrap());
-        *pos += 2;
-        Ok(v)
+        read_diagnostics_array::<2>(buf, pos, "u16").map(u16::from_le_bytes)
     };
 
     let read_u32 = |buf: &[u8], pos: &mut usize| -> Result<u32, CovyError> {
-        if *pos + 4 > buf.len() {
-            return Err(CovyError::Cache(
-                "unexpected EOF while reading u32".to_string(),
-            ));
-        }
-        let v = u32::from_le_bytes(buf[*pos..*pos + 4].try_into().unwrap());
-        *pos += 4;
-        Ok(v)
+        read_diagnostics_array::<4>(buf, pos, "u32").map(u32::from_le_bytes)
     };
 
     let read_u64 = |buf: &[u8], pos: &mut usize| -> Result<u64, CovyError> {
-        if *pos + 8 > buf.len() {
-            return Err(CovyError::Cache(
-                "unexpected EOF while reading u64".to_string(),
-            ));
-        }
-        let v = u64::from_le_bytes(buf[*pos..*pos + 8].try_into().unwrap());
-        *pos += 8;
-        Ok(v)
+        read_diagnostics_array::<8>(buf, pos, "u64").map(u64::from_le_bytes)
     };
 
     if !is_new_diagnostics_format(data) {
@@ -290,6 +269,24 @@ fn parse_diagnostics_state(data: &[u8]) -> Result<DiagnosticsState, CovyError> {
         entries,
         payload_start: pos,
     })
+}
+
+fn read_diagnostics_array<const N: usize>(
+    buf: &[u8],
+    pos: &mut usize,
+    kind: &str,
+) -> Result<[u8; N], CovyError> {
+    let end = pos
+        .checked_add(N)
+        .ok_or_else(|| CovyError::Cache(format!("unexpected EOF while reading {kind}")))?;
+    let bytes = buf
+        .get(*pos..end)
+        .ok_or_else(|| CovyError::Cache(format!("unexpected EOF while reading {kind}")))?;
+    let array = bytes
+        .try_into()
+        .map_err(|_| CovyError::Cache(format!("unexpected EOF while reading {kind}")))?;
+    *pos = end;
+    Ok(array)
 }
 
 fn load_all_from_state(
@@ -390,7 +387,7 @@ fn decode_issues_block(
         ));
     }
 
-    let stored: Vec<StoredIssue> = bincode::deserialize(&data[start..end])
+    let stored: Vec<StoredIssue> = wincode::deserialize(&data[start..end])
         .map_err(|e| CovyError::Cache(format!("Failed to deserialize diagnostics block: {e}")))?;
 
     Ok(stored.into_iter().map(runtime_issue_from_stored).collect())
@@ -409,7 +406,7 @@ fn decode_issues_block_from_reader(
     let mut block = vec![0u8; entry.len as usize];
     file.read_exact(&mut block)?;
 
-    let stored: Vec<StoredIssue> = bincode::deserialize(&block)
+    let stored: Vec<StoredIssue> = wincode::deserialize(&block)
         .map_err(|e| CovyError::Cache(format!("Failed to deserialize diagnostics block: {e}")))?;
     Ok(stored.into_iter().map(runtime_issue_from_stored).collect())
 }
@@ -524,7 +521,9 @@ fn read_u64(file: &mut File) -> Result<u64, CovyError> {
     Ok(u64::from_le_bytes(buf))
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 struct StoredIssue {
     path: String,
     line: u32,
@@ -537,7 +536,9 @@ struct StoredIssue {
     fingerprint: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 struct StoredDiagnosticsData {
     issues_by_file: std::collections::BTreeMap<String, Vec<StoredIssue>>,
     format: Option<DiagnosticsFormat>,
@@ -596,6 +597,18 @@ mod tests {
         assert_eq!(meta.schema_version, DIAGNOSTICS_STATE_SCHEMA_VERSION);
         assert!(meta.normalized_paths);
         assert_eq!(meta.repo_root_id.as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn truncated_schema_version_returns_cache_error_without_panicking() {
+        let mut bytes = DIAGNOSTICS_MAGIC.to_vec();
+        bytes.push(1);
+
+        let error = deserialize_diagnostics_with_metadata(&bytes).unwrap_err();
+
+        assert!(
+            matches!(error, CovyError::Cache(message) if message == "unexpected EOF while reading u16")
+        );
     }
 
     #[test]

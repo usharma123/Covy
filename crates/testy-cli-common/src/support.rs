@@ -1,3 +1,5 @@
+use crate::error::{Result, TestyCliError};
+
 pub fn warn_if_legacy_flag_used(alias: &str, canonical: &str) {
     if !deprecation_warnings_enabled() || global_quiet_enabled() || global_json_enabled() {
         return;
@@ -34,12 +36,17 @@ pub fn maybe_warn_deprecated(message: &str) {
     }
 }
 
+/// Decode JSON while appending the expected schema to parse failures.
+///
+/// # Errors
+///
+/// Returns [`TestyCliError::JsonWithExample`] with the concrete decoder source
+/// when `input` does not deserialize into `T`.
 pub fn deserialize_json_with_example<T: serde::de::DeserializeOwned>(
     input: &str,
     type_name: &str,
     example: &str,
-) -> anyhow::Result<T> {
-    serde_json::from_str(input).map_err(|e| {
-        anyhow::anyhow!("Failed to parse {type_name}: {e}\n\nExpected JSON shape:\n{example}")
-    })
+) -> Result<T> {
+    serde_json::from_str(input)
+        .map_err(|source| TestyCliError::json_with_example(type_name, source, example))
 }

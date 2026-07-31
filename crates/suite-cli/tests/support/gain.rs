@@ -8,11 +8,7 @@ pub fn suite_cmd() -> Command {
 }
 
 pub fn init_git_status_fixture(root: &TempDir) {
-    std::process::Command::new("git")
-        .args(["init"])
-        .current_dir(root.path())
-        .status()
-        .unwrap();
+    crate::process_harness::run_git(root.path(), &["init"]);
     fs::write(root.path().join("tracked.txt"), "changed\n").unwrap();
 }
 

@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use packet28_reducer_core::{classify_command_argv, CommandReducerSpec};
+use packet28_reducer_core::{
+    classify_command_argv, consume_leading_env_assignments, CommandReducerSpec,
+};
 
 #[path = "route_registry_native.rs"]
 mod route_registry_native;
@@ -116,7 +118,7 @@ fn decide_command_route_inner(
     let Ok(argv) = shell_words::split(trimmed) else {
         return raw_passthrough("shell_parse_error");
     };
-    let (mut env_assignments, mut argv) = split_leading_env_assignments(argv);
+    let (mut env_assignments, mut argv) = consume_leading_env_assignments(argv);
     let mut wrapper_prefix = Vec::new();
     if argv.is_empty() {
         return raw_passthrough("empty_command");
@@ -390,19 +392,6 @@ fn raw_passthrough(reason: &str) -> RouteDecision {
         wrapper_prefix: Vec::new(),
         original_command: None,
     }
-}
-
-fn split_leading_env_assignments(argv: Vec<String>) -> (Vec<(String, String)>, Vec<String>) {
-    let mut assignments = Vec::new();
-    let mut idx = 0usize;
-    while idx < argv.len() && looks_like_env_assignment(&argv[idx]) {
-        let mut parts = argv[idx].splitn(2, '=');
-        let key = parts.next().unwrap_or_default().trim().to_string();
-        let value = parts.next().unwrap_or_default().to_string();
-        assignments.push((key, value));
-        idx += 1;
-    }
-    (assignments, argv[idx..].to_vec())
 }
 
 fn strip_supported_runtime_prefixes(

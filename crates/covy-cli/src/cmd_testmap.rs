@@ -10,6 +10,7 @@ const TESTMAP_RUNNER_OPTIONS: testy_cli_common::testmap::TestmapRunnerOptions =
 
 pub fn run(args: TestmapArgs, _config_path: &str) -> Result<i32> {
     testy_cli_common::testmap::run_testmap_command(args, &TESTMAP_RUNNER_OPTIONS)
+        .map_err(Into::into)
 }
 
 fn emit_warning(message: &str) {

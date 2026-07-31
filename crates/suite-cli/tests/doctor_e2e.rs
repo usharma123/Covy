@@ -1,8 +1,14 @@
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
+
 use assert_cmd::Command;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
-use std::sync::OnceLock;
 use tempfile::TempDir;
 
 fn suite_cmd() -> Command {
@@ -10,14 +16,7 @@ fn suite_cmd() -> Command {
 }
 
 fn ensure_packet28d_built() {
-    static BUILT: OnceLock<()> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        let status = std::process::Command::new("cargo")
-            .args(["build", "-p", "packet28d"])
-            .status()
-            .unwrap();
-        assert!(status.success(), "failed to build packet28d");
-    });
+    process_harness::ensure_packet28d_built();
 }
 
 fn write_repo_fixture(root: &Path) {
@@ -46,16 +45,28 @@ enum Beta {
 }
 
 fn git(root: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {:?} failed with {status}", args);
+    process_harness::run_git(root, args);
 }
 
 fn init_repo(root: &Path) {
     git(root, &["init"]);
+}
+
+fn commit_repo_fixture(root: &Path) {
+    fs::write(root.join(".gitignore"), ".covy/\n.mcp.json\n.packet28/\n").unwrap();
+    git(root, &["add", "--all"]);
+    git(
+        root,
+        &[
+            "-c",
+            "user.name=Packet28 Test",
+            "-c",
+            "user.email=packet28-test@example.invalid",
+            "commit",
+            "-m",
+            "initialize doctor fixture",
+        ],
+    );
 }
 
 fn write_cached_coverage_state(root: &Path) {
@@ -88,19 +99,7 @@ fn test_doctor_cli_reports_healthy_stack() {
     let dir = TempDir::new().unwrap();
     init_repo(dir.path());
     write_repo_fixture(dir.path());
-    git(dir.path(), &["add", "src/alpha.rs", "src/beta.rs"]);
-    git(
-        dir.path(),
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "-m",
-            "init",
-        ],
-    );
+    commit_repo_fixture(dir.path());
     write_cached_coverage_state(dir.path());
     write_cached_testmap_state(dir.path());
     fs::write(
@@ -158,6 +157,7 @@ fn test_doctor_cli_reports_healthy_runtime() {
     let dir = TempDir::new().unwrap();
     init_repo(dir.path());
     write_repo_fixture(dir.path());
+    commit_repo_fixture(dir.path());
 
     let output = suite_cmd()
         .args(["doctor", "--root", dir.path().to_str().unwrap(), "--json"])

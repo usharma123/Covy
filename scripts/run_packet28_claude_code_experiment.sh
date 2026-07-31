@@ -16,8 +16,8 @@ REPO_DIR="$WORK_DIR/repo"
 mkdir -p "$OUT_DIR" "$WORK_DIR"
 
 if [ ! -x "$PACKET28_BIN" ] || [ ! -x "$P28_BIN" ]; then
-  cargo build -q -p suite-cli --bin Packet28
-  cargo build -q -p packet28-search-cli --bin p28
+  cargo build --locked -q -p suite-cli --bin Packet28
+  cargo build --locked -q -p packet28-search-cli --bin p28
 fi
 
 rsync -a --delete \

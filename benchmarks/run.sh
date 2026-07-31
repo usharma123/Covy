@@ -13,10 +13,10 @@ fi
 if [[ -z "${BENCH_SKIP_BUILD:-}" ]]; then
   if [[ "$BIN" == "target/release/covy" ]]; then
     echo "Building release binary..."
-    cargo build --release -p covy-cli
+    cargo build --release --locked -p covy-cli
   elif [[ "$BIN" == "target/debug/covy" ]]; then
     echo "Building debug binary..."
-    cargo build -p covy-cli
+    cargo build --locked -p covy-cli
   fi
 fi
 

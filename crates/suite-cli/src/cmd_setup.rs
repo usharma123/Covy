@@ -9,8 +9,9 @@ use anyhow::{Context, Result};
 use clap::Args;
 use colored::Colorize;
 #[cfg(test)]
-use packet28_daemon_core::RelaunchPreference;
-use packet28_daemon_core::{DaemonIndexRebuildRequest, DaemonRequest, DaemonResponse};
+use packet28_daemon_protocol::hooks::RelaunchPreference;
+use packet28_daemon_protocol::index::DaemonIndexRebuildRequest;
+use packet28_daemon_protocol::message::{DaemonRequest, DaemonResponse};
 use serde_json::{json, Value};
 use toml::value::Table as TomlTable;
 
@@ -29,16 +30,12 @@ use crate::cmd_setup_render::{
 #[cfg(test)]
 use crate::cmd_setup_runtime::PromptTarget;
 use crate::cmd_setup_runtime::{
-    codex_config_path, detect_runtimes, dirs_home, hook_config_path, mcp_config_path,
-    prompt_target_label, push_prompt_targets, runtime_needs_hook_runtime_config,
-    runtime_supports_hooks, runtime_supports_mcp, select_setup_runtimes, which_exists, RuntimeInfo,
-    RuntimeKind,
+    adapters, detect_runtimes, prompt_target_label, push_prompt_targets, select_setup_runtimes,
+    RuntimeEnvironment, RuntimeInfo,
 };
-#[cfg(test)]
-use crate::runtime_integrations::hermes;
 
 #[path = "cmd_setup_commands.rs"]
-mod setup_commands;
+pub(crate) mod setup_commands;
 use setup_commands::resolve_packet28_mcp_command;
 #[cfg(test)]
 use setup_commands::{
@@ -46,16 +43,10 @@ use setup_commands::{
     resolve_packet28_cli_command, shell_escape,
 };
 #[path = "cmd_setup_hooks.rs"]
-mod setup_hooks;
-use setup_hooks::{
-    write_claude_hook_config, write_copilot_hook_config, write_cursor_hook_config,
-    write_gemini_hook_config, write_hook_runtime_config, write_windsurf_hook_config,
-};
+pub(crate) mod setup_hooks;
+use setup_hooks::write_hook_runtime_config;
 #[path = "cmd_setup_plugins.rs"]
-mod setup_plugins;
-#[cfg(test)]
-use setup_plugins::{hermes_config_enables_packet28, patch_hermes_config};
-use setup_plugins::{write_hermes_plugin, write_opencode_plugin};
+pub(crate) mod setup_plugins;
 
 #[derive(Args)]
 pub struct SetupArgs {
@@ -71,12 +62,13 @@ pub struct SetupArgs {
     #[arg(long)]
     pub fallback_only: bool,
 
-    /// Specific runtime to configure (claude, cursor, codex, windsurf, copilot, gemini, opencode, hermes, cline, roo, kilocode, antigravity, all)
+    /// Specific supported runtime slug to configure, or `all` for detected runtimes
     #[arg(long, default_value = "all")]
     pub runtime: String,
 }
 
-enum McpConfigStatus {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum McpConfigStatus {
     Written,
     AlreadyConfigured,
     Declined,
@@ -108,7 +100,8 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     let root_display = root.display().to_string();
 
     // Detect runtimes
-    let runtimes = detect_runtimes(&root);
+    let runtime_environment = RuntimeEnvironment::from_process(&root);
+    let runtimes = detect_runtimes(&runtime_environment);
     let setup_choice = match resolve_setup_choice(&args, &runtimes)? {
         Some(choice) => choice,
         None => {
@@ -148,7 +141,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
         if !selected_runtimes
             .iter()
             .copied()
-            .any(|runtime| runtime_supports_mcp(runtime.kind))
+            .any(|runtime| runtime.adapter.mcp.is_some())
         {
             println!(
                 "  {} No MCP-capable runtimes selected. Falling back to instruction files.",
@@ -158,17 +151,17 @@ pub fn run(args: SetupArgs) -> Result<i32> {
         } else {
             render_setup_section("MCP servers");
             for rt in &selected_runtimes {
-                if !runtime_supports_mcp(rt.kind) {
+                let Some(mcp) = rt.adapter.mcp else {
                     continue;
-                }
-                match configure_runtime_mcp(rt, &root, auto_apply)? {
+                };
+                match mcp.configure(&runtime_environment, auto_apply)? {
                     McpConfigStatus::Written => {
                         mcp_configured = true;
                         push_prompt_targets(&mut prompt_targets, &rt.prompt_targets);
                         println!(
                             "    {} {}",
                             "✓".green().bold(),
-                            runtime_mcp_status(rt, &root).dimmed()
+                            mcp.status(&runtime_environment).dimmed()
                         );
                     }
                     McpConfigStatus::AlreadyConfigured => {
@@ -188,29 +181,29 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     if selected_runtimes
         .iter()
         .copied()
-        .any(|runtime| runtime_supports_hooks(runtime.kind))
+        .any(|runtime| runtime.adapter.hooks.is_some())
     {
         render_setup_section("Runtime hooks");
         for rt in &selected_runtimes {
-            if !runtime_supports_hooks(rt.kind) {
+            let Some(hooks) = rt.adapter.hooks else {
                 continue;
-            }
-            match configure_runtime_hooks(rt, &root, auto_apply)? {
+            };
+            match hooks.configure(&runtime_environment, auto_apply)? {
                 McpConfigStatus::Written => {
                     hook_configured = true;
-                    if runtime_needs_hook_runtime_config(rt.kind) {
+                    if rt.adapter.writes_hook_runtime_config {
                         any_hook_runtime_configs_written = true;
                     }
                     println!(
                         "    {} {} hooks → {}",
                         "✓".green().bold(),
                         rt.name,
-                        runtime_hook_status(rt, &root).dimmed()
+                        hooks.status(&runtime_environment).dimmed()
                     );
                 }
                 McpConfigStatus::AlreadyConfigured => {
                     hook_configured = true;
-                    if runtime_needs_hook_runtime_config(rt.kind) {
+                    if rt.adapter.writes_hook_runtime_config {
                         any_hook_runtime_configs_written = true;
                     }
                     println!(
@@ -231,7 +224,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
             println!(
                 "    {} Packet28 hook runtime → {}",
                 "✓".green().bold(),
-                packet28_daemon_core::hook_runtime_config_path(&root)
+                packet28_daemon_protocol::paths::hook_runtime_config_path(&root)
                     .display()
                     .to_string()
                     .dimmed()
@@ -260,7 +253,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     for rt in selected_runtimes
         .iter()
         .copied()
-        .filter(|runtime| setup_choice.fallback_only || !runtime_supports_mcp(runtime.kind))
+        .filter(|runtime| setup_choice.fallback_only || runtime.adapter.mcp.is_none())
     {
         push_prompt_targets(&mut prompt_targets, &rt.prompt_targets);
     }
@@ -506,20 +499,7 @@ fn explicit_setup_choice(args: &SetupArgs, runtimes: &[RuntimeInfo]) -> Result<S
 }
 
 fn supported_runtime_slugs() -> Vec<&'static str> {
-    vec![
-        "claude",
-        "cursor",
-        "codex",
-        "windsurf",
-        "copilot",
-        "gemini",
-        "opencode",
-        "hermes",
-        "cline",
-        "roo",
-        "kilocode",
-        "antigravity",
-    ]
+    adapters().iter().map(|adapter| adapter.slug).collect()
 }
 
 fn prompt_setup_choice(runtimes: &[RuntimeInfo]) -> Result<Option<SetupPlanChoice>> {
@@ -572,7 +552,7 @@ fn prompt_setup_choice(runtimes: &[RuntimeInfo]) -> Result<Option<SetupPlanChoic
             runtime_scope: SetupRuntimeScope::Detected,
             fallback_only: true,
         },
-        _ => unreachable!("validated menu choice"),
+        _ => return Ok(None),
     };
     Ok(Some(choice))
 }
@@ -616,7 +596,7 @@ fn prompt_advanced_setup_choice(runtimes: &[RuntimeInfo]) -> Result<Option<Setup
         1 => SetupRuntimeScope::Detected,
         2 => SetupRuntimeScope::All,
         3 => prompt_single_runtime_scope(runtimes)?,
-        _ => unreachable!("validated menu choice"),
+        _ => return Ok(None),
     };
 
     Ok(Some(SetupPlanChoice {
@@ -683,122 +663,20 @@ fn prompt_menu_selection(prompt: &str, max: usize, default: usize) -> Result<Opt
     }
 }
 
-fn configure_runtime_mcp(
-    runtime: &RuntimeInfo,
+pub(crate) fn write_mcp_config(
+    path: &Path,
     root: &Path,
     auto_yes: bool,
 ) -> Result<McpConfigStatus> {
-    match runtime.kind {
-        RuntimeKind::Claude | RuntimeKind::Cursor => {
-            write_mcp_config(&mcp_config_path(runtime.kind, root), root, auto_yes)
-        }
-        RuntimeKind::Codex => configure_codex_mcp(root, auto_yes),
-        RuntimeKind::Windsurf => {
-            write_windsurf_mcp_config(&mcp_config_path(runtime.kind, root), root, auto_yes)
-        }
-        RuntimeKind::Copilot
-        | RuntimeKind::Gemini
-        | RuntimeKind::OpenCode
-        | RuntimeKind::Hermes
-        | RuntimeKind::Cline
-        | RuntimeKind::Roo
-        | RuntimeKind::KiloCode
-        | RuntimeKind::Antigravity => {
-            unreachable!("instruction-only runtimes do not configure MCP")
-        }
-    }
+    write_mcp_config_with_label(path, root, auto_yes, None)
 }
 
-fn configure_runtime_hooks(
-    runtime: &RuntimeInfo,
+pub(crate) fn write_mcp_config_with_label(
+    path: &Path,
     root: &Path,
     auto_yes: bool,
+    runtime_name: Option<&str>,
 ) -> Result<McpConfigStatus> {
-    match runtime.kind {
-        RuntimeKind::Claude => {
-            write_claude_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
-        }
-        RuntimeKind::Cursor => {
-            write_cursor_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
-        }
-        RuntimeKind::Copilot => {
-            write_copilot_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
-        }
-        RuntimeKind::Gemini => {
-            write_gemini_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
-        }
-        RuntimeKind::OpenCode => {
-            write_opencode_plugin(&hook_config_path(runtime.kind, root), auto_yes)
-        }
-        RuntimeKind::Hermes => write_hermes_plugin(&dirs_home(), auto_yes),
-        RuntimeKind::Windsurf => {
-            write_windsurf_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
-        }
-        RuntimeKind::Codex
-        | RuntimeKind::Cline
-        | RuntimeKind::Roo
-        | RuntimeKind::KiloCode
-        | RuntimeKind::Antigravity => {
-            unreachable!("this runtime does not configure Packet28 hooks")
-        }
-    }
-}
-
-fn runtime_mcp_status(runtime: &RuntimeInfo, root: &Path) -> String {
-    match runtime.kind {
-        RuntimeKind::Claude => format!(
-            "{} → {}",
-            runtime.name,
-            mcp_config_path(runtime.kind, root).display()
-        ),
-        RuntimeKind::Cursor => format!(
-            "{} → {}",
-            runtime.name,
-            mcp_config_path(runtime.kind, root).display()
-        ),
-        RuntimeKind::Codex => format!(
-            "{} → {}",
-            runtime.name,
-            mcp_config_path(runtime.kind, root).display()
-        ),
-        RuntimeKind::Windsurf => format!(
-            "{} → {}",
-            runtime.name,
-            mcp_config_path(runtime.kind, root).display()
-        ),
-        RuntimeKind::Copilot
-        | RuntimeKind::Gemini
-        | RuntimeKind::OpenCode
-        | RuntimeKind::Hermes
-        | RuntimeKind::Cline
-        | RuntimeKind::Roo
-        | RuntimeKind::KiloCode
-        | RuntimeKind::Antigravity => {
-            unreachable!("instruction-only runtimes do not configure MCP")
-        }
-    }
-}
-
-fn runtime_hook_status(runtime: &RuntimeInfo, root: &Path) -> String {
-    match runtime.kind {
-        RuntimeKind::Claude
-        | RuntimeKind::Copilot
-        | RuntimeKind::Cursor
-        | RuntimeKind::Gemini
-        | RuntimeKind::Hermes
-        | RuntimeKind::OpenCode
-        | RuntimeKind::Windsurf => hook_config_path(runtime.kind, root).display().to_string(),
-        RuntimeKind::Codex
-        | RuntimeKind::Cline
-        | RuntimeKind::Roo
-        | RuntimeKind::KiloCode
-        | RuntimeKind::Antigravity => {
-            unreachable!("this runtime does not configure Packet28 hooks")
-        }
-    }
-}
-
-fn write_mcp_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
     let root_arg = if root == Path::new(".") {
         ".".to_string()
     } else {
@@ -829,10 +707,19 @@ fn write_mcp_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfi
     let servers = config
         .entry("mcpServers".to_string())
         .or_insert_with(|| json!({}));
+    let servers = servers.as_object_mut().with_context(|| {
+        format!(
+            "refusing to overwrite 'mcpServers' in '{}'; expected a JSON object",
+            path.display()
+        )
+    })?;
 
     if !auto_yes {
+        let target = runtime_name
+            .map(|name| format!("{name} MCP config"))
+            .unwrap_or_else(|| "MCP config".to_string());
         eprint!(
-            "    Write MCP config to {}? [Y/n] ",
+            "    Write {target} to {}? [Y/n] ",
             path.display().to_string().dimmed()
         );
         let mut input = String::new();
@@ -844,13 +731,11 @@ fn write_mcp_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfi
     }
 
     // Insert packet28 server
-    if let Some(obj) = servers.as_object_mut() {
-        let needs_write = obj.get("packet28") != Some(&packet28_entry);
-        if !needs_write {
-            return Ok(McpConfigStatus::AlreadyConfigured);
-        }
-        obj.insert("packet28".to_string(), packet28_entry);
+    let needs_write = servers.get("packet28") != Some(&packet28_entry);
+    if !needs_write {
+        return Ok(McpConfigStatus::AlreadyConfigured);
     }
+    servers.insert("packet28".to_string(), packet28_entry);
 
     // Write back
     if let Some(parent) = path.parent() {
@@ -862,169 +747,7 @@ fn write_mcp_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfi
     Ok(McpConfigStatus::Written)
 }
 
-fn configure_codex_mcp(root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
-    let config_path = codex_config_path(&dirs_home());
-    if codex_mcp_entry_matches(&config_path, root)? {
-        return Ok(McpConfigStatus::AlreadyConfigured);
-    }
-    if !auto_yes {
-        eprint!(
-            "    Register Packet28 MCP in Codex via {}? [Y/n] ",
-            config_path.display().to_string().dimmed()
-        );
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).ok();
-        let trimmed = input.trim().to_lowercase();
-        if !trimmed.is_empty() && trimmed != "y" && trimmed != "yes" {
-            return Ok(McpConfigStatus::Declined);
-        }
-    }
-    if which_exists("codex") && run_codex_mcp_add(root).unwrap_or(false) {
-        return Ok(McpConfigStatus::Written);
-    }
-    write_codex_mcp_config(&config_path, root)
-}
-
-fn codex_mcp_entry_matches(path: &Path, root: &Path) -> Result<bool> {
-    if !path.exists() {
-        return Ok(false);
-    }
-    let config = read_toml_config(path)?;
-    let Some(server) = config
-        .get("mcp_servers")
-        .and_then(toml::Value::as_table)
-        .and_then(|servers| servers.get("packet28"))
-        .and_then(toml::Value::as_table)
-    else {
-        return Ok(false);
-    };
-    let command_matches = server
-        .get("command")
-        .and_then(toml::Value::as_str)
-        .map(str::trim)
-        == Some(resolve_packet28_mcp_command().as_str());
-    let expected_root = root.display().to_string();
-    let args_matches = server
-        .get("args")
-        .and_then(toml::Value::as_array)
-        .map(|args| {
-            args.iter()
-                .filter_map(toml::Value::as_str)
-                .collect::<Vec<_>>()
-                == vec!["--root", expected_root.as_str(), "--toolset", "core"]
-        })
-        .unwrap_or(false);
-    Ok(command_matches && args_matches)
-}
-
-fn run_codex_mcp_add(root: &Path) -> Result<bool> {
-    let status = std::process::Command::new("codex")
-        .args([
-            "mcp",
-            "add",
-            "packet28",
-            "--",
-            &resolve_packet28_mcp_command(),
-            "--root",
-            &root.display().to_string(),
-            "--toolset",
-            "core",
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .context("failed to run `codex mcp add`")?;
-    Ok(status.success())
-}
-
-fn write_codex_mcp_config(path: &Path, root: &Path) -> Result<McpConfigStatus> {
-    let mut config = read_toml_config_or_default(path)?;
-    let table = config
-        .as_table_mut()
-        .context("Codex config must be a TOML table")?;
-    let servers = toml_table_entry(table, "mcp_servers", path)?;
-    let desired_command = resolve_packet28_mcp_command();
-    let desired_root = root.display().to_string();
-    let desired_args = vec![
-        toml::Value::String("--root".to_string()),
-        toml::Value::String(desired_root.clone()),
-        toml::Value::String("--toolset".to_string()),
-        toml::Value::String("core".to_string()),
-    ];
-    let already_configured = servers
-        .get("packet28")
-        .and_then(toml::Value::as_table)
-        .is_some_and(|packet28| {
-            packet28
-                .get("command")
-                .and_then(toml::Value::as_str)
-                .map(str::trim)
-                == Some(desired_command.as_str())
-                && packet28.get("args").and_then(toml::Value::as_array) == Some(&desired_args)
-        });
-    if already_configured {
-        return Ok(McpConfigStatus::AlreadyConfigured);
-    }
-    let mut packet28 = TomlTable::new();
-    packet28.insert("command".to_string(), toml::Value::String(desired_command));
-    packet28.insert("args".to_string(), toml::Value::Array(desired_args));
-    servers.insert("packet28".to_string(), toml::Value::Table(packet28));
-    write_toml_config(path, &config)?;
-    Ok(McpConfigStatus::Written)
-}
-
-fn write_windsurf_mcp_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
-    let root_arg = root.display().to_string();
-    let packet28_entry = json!({
-        "command": resolve_packet28_mcp_command(),
-        "args": ["--root", root_arg, "--toolset", "core"]
-    });
-    let mut config: BTreeMap<String, Value> = if path.exists() {
-        let content = fs::read_to_string(path)
-            .with_context(|| format!("failed to read '{}'", path.display()))?;
-        serde_json::from_str(&content).with_context(|| {
-            format!(
-                "refusing to overwrite invalid JSON in '{}'; fix the file and rerun setup",
-                path.display()
-            )
-        })?
-    } else {
-        BTreeMap::new()
-    };
-    let servers = config
-        .entry("mcpServers".to_string())
-        .or_insert_with(|| json!({}));
-
-    if !auto_yes {
-        eprint!(
-            "    Write Windsurf MCP config to {}? [Y/n] ",
-            path.display().to_string().dimmed()
-        );
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).ok();
-        let trimmed = input.trim().to_lowercase();
-        if !trimmed.is_empty() && trimmed != "y" && trimmed != "yes" {
-            return Ok(McpConfigStatus::Declined);
-        }
-    }
-
-    if let Some(obj) = servers.as_object_mut() {
-        let needs_write = obj.get("packet28") != Some(&packet28_entry);
-        if !needs_write {
-            return Ok(McpConfigStatus::AlreadyConfigured);
-        }
-        obj.insert("packet28".to_string(), packet28_entry);
-    }
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let content = serde_json::to_string_pretty(&config)?;
-    fs::write(path, format!("{content}\n"))?;
-    Ok(McpConfigStatus::Written)
-}
-
-fn read_toml_config(path: &Path) -> Result<toml::Value> {
+pub(crate) fn read_toml_config(path: &Path) -> Result<toml::Value> {
     let content =
         fs::read_to_string(path).with_context(|| format!("failed to read '{}'", path.display()))?;
     toml::from_str(&content).with_context(|| {
@@ -1035,7 +758,7 @@ fn read_toml_config(path: &Path) -> Result<toml::Value> {
     })
 }
 
-fn read_toml_config_or_default(path: &Path) -> Result<toml::Value> {
+pub(crate) fn read_toml_config_or_default(path: &Path) -> Result<toml::Value> {
     if path.exists() {
         read_toml_config(path)
     } else {
@@ -1043,7 +766,7 @@ fn read_toml_config_or_default(path: &Path) -> Result<toml::Value> {
     }
 }
 
-fn toml_table_entry<'a>(
+pub(crate) fn toml_table_entry<'a>(
     table: &'a mut TomlTable,
     key: &str,
     path: &Path,
@@ -1060,7 +783,7 @@ fn toml_table_entry<'a>(
     })
 }
 
-fn write_toml_config(path: &Path, config: &toml::Value) -> Result<()> {
+pub(crate) fn write_toml_config(path: &Path, config: &toml::Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -1073,11 +796,7 @@ fn write_agent_file(path: &Path, content: &str) -> Result<bool> {
     // If file exists, check if it already contains Packet28 guidance
     if path.exists() {
         let existing = fs::read_to_string(path)?;
-        if existing.contains("packet28.write_intention")
-            || existing.contains("packet28.prepare_handoff")
-            || existing.contains("Packet28 mcp serve")
-            || existing.contains("hook claude")
-        {
+        if agent_surface::contains_packet28_guidance(&existing) {
             return Ok(false); // already has Packet28 instructions
         }
 

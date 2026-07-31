@@ -1,11 +1,9 @@
 mod support;
 
 use serde_json::json;
-use std::io::BufReader;
-use std::process::Stdio;
 use support::mcp::{
-    initialize_mcp_session, packet28_cmd, packet28_process, read_mcp_message_for_id,
-    write_mcp_message,
+    initialize_mcp_session, packet28_cmd, packet28_process, read_mcp_message_for_id, spawn_mcp,
+    stop_mcp_server, write_mcp_message,
 };
 use tempfile::TempDir;
 
@@ -13,20 +11,16 @@ use tempfile::TempDir;
 fn test_mcp_graph_distill_and_extract_patterns() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
-    let mut child = packet28_process()
+    let mut command = packet28_process();
+    command
         .current_dir(root.path())
         .env("HOME", home.path())
-        .args(["mcp", "serve", "--root", root.path().to_str().unwrap()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    let mut stdout = BufReader::new(child.stdout.take().unwrap());
-    initialize_mcp_session(&mut stdin, &mut stdout);
+        .args(["mcp", "serve", "--root", root.path().to_str().unwrap()]);
+    let mut server = spawn_mcp(&mut command);
+    initialize_mcp_session(&mut server);
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":2,
@@ -37,14 +31,14 @@ fn test_mcp_graph_distill_and_extract_patterns() {
             }
         }),
     );
-    let graph_memoir = read_mcp_message_for_id(&mut stdout, 2);
+    let graph_memoir = read_mcp_message_for_id(&mut server, 2);
     assert_eq!(
         graph_memoir["result"]["structuredContent"]["name"].as_str(),
         Some("McpMemoir")
     );
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":3,
@@ -60,14 +54,14 @@ fn test_mcp_graph_distill_and_extract_patterns() {
             }
         }),
     );
-    let mcp_distill_memory = read_mcp_message_for_id(&mut stdout, 3);
+    let mcp_distill_memory = read_mcp_message_for_id(&mut server, 3);
     assert_eq!(
         mcp_distill_memory["result"]["structuredContent"]["topic"].as_str(),
         Some("mcp-distill")
     );
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":4,
@@ -78,7 +72,7 @@ fn test_mcp_graph_distill_and_extract_patterns() {
             }
         }),
     );
-    let graph_distill = read_mcp_message_for_id(&mut stdout, 4);
+    let graph_distill = read_mcp_message_for_id(&mut server, 4);
     assert_eq!(
         graph_distill["result"]["structuredContent"]["created_count"].as_u64(),
         Some(2)
@@ -97,7 +91,7 @@ fn test_mcp_graph_distill_and_extract_patterns() {
         (6, "Adapter pattern extraction should create graph concepts"),
     ] {
         write_mcp_message(
-            &mut stdin,
+            &mut server,
             &json!({
                 "jsonrpc":"2.0",
                 "id":id,
@@ -113,7 +107,7 @@ fn test_mcp_graph_distill_and_extract_patterns() {
                 }
             }),
         );
-        let stored_pattern_memory = read_mcp_message_for_id(&mut stdout, id);
+        let stored_pattern_memory = read_mcp_message_for_id(&mut server, id);
         assert_eq!(
             stored_pattern_memory["result"]["structuredContent"]["topic"].as_str(),
             Some("mcp-patterns")
@@ -121,7 +115,7 @@ fn test_mcp_graph_distill_and_extract_patterns() {
     }
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":7,
@@ -132,7 +126,7 @@ fn test_mcp_graph_distill_and_extract_patterns() {
             }
         }),
     );
-    let memory_patterns = read_mcp_message_for_id(&mut stdout, 7);
+    let memory_patterns = read_mcp_message_for_id(&mut server, 7);
     assert!(
         memory_patterns["result"]["structuredContent"]["pattern_count"]
             .as_u64()
@@ -152,8 +146,7 @@ fn test_mcp_graph_distill_and_extract_patterns() {
             .any(|concept| concept["name"] == "adapter" && concept["memoir_name"] == "McpMemoir")
     );
 
-    let _ = child.kill();
-    let _ = child.wait();
+    stop_mcp_server(server);
     packet28_cmd()
         .current_dir(root.path())
         .env("HOME", home.path())

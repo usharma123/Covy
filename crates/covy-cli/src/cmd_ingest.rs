@@ -57,7 +57,7 @@ struct IngestSummary {
 
 pub fn run(args: IngestArgs, config_path: &str) -> Result<i32> {
     crate::cmd_common::warn_if_legacy_flag_used("--out", "--output");
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
 
     // Resolve coverage globs
     let mut files: Vec<PathBuf> = Vec::new();

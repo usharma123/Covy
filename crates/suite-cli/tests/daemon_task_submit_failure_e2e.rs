@@ -1,24 +1,29 @@
 #[path = "support/daemon_task_submit.rs"]
 mod daemon_task_submit;
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use daemon_task_submit::{
     ensure_packet28d_built, setup_changed_repo, suite_cmd, task_spec_with_file_watch,
     write_task_spec,
 };
 use serde_json::{json, Value};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
-#[test]
-#[cfg(unix)]
-fn test_daemon_task_submit_failed_submit_cleans_up_task_and_watches() {
-    ensure_packet28d_built();
-    let dir = TempDir::new().unwrap();
-    setup_changed_repo(dir.path());
-    let spec_path = dir.path().join("bad-task-spec.json");
+fn invalid_task_spec(root: &Path) -> PathBuf {
+    let spec_path = root.join("bad-task-spec.json");
     write_task_spec(
         &spec_path,
         task_spec_with_file_watch(
-            dir.path(),
+            root,
             "task-invalid",
             vec![json!({
                 "id": "",
@@ -32,33 +37,40 @@ fn test_daemon_task_submit_failed_submit_cleans_up_task_and_watches() {
             "file",
         ),
     );
+    spec_path
+}
 
+fn start_daemon(root: &Path) {
     suite_cmd()
-        .args(["daemon", "start", "--root", dir.path().to_str().unwrap()])
+        .args(["daemon", "start", "--root", root.to_str().unwrap()])
         .assert()
         .success();
+}
 
+fn submit_invalid_task(root: &Path, spec_path: &Path) {
     suite_cmd()
         .args([
             "daemon",
             "task",
             "submit",
             "--root",
-            dir.path().to_str().unwrap(),
+            root.to_str().unwrap(),
             "--spec",
             spec_path.to_str().unwrap(),
             "--json",
         ])
         .assert()
         .code(2);
+}
 
+fn assert_task_and_watches_absent(root: &Path) {
     let task_output = suite_cmd()
         .args([
             "daemon",
             "task",
             "status",
             "--root",
-            dir.path().to_str().unwrap(),
+            root.to_str().unwrap(),
             "--task-id",
             "task-invalid",
             "--json",
@@ -77,7 +89,7 @@ fn test_daemon_task_submit_failed_submit_cleans_up_task_and_watches() {
             "watch",
             "list",
             "--root",
-            dir.path().to_str().unwrap(),
+            root.to_str().unwrap(),
             "--task-id",
             "task-invalid",
             "--json",
@@ -89,9 +101,55 @@ fn test_daemon_task_submit_failed_submit_cleans_up_task_and_watches() {
         .clone();
     let watches: Value = serde_json::from_slice(&watches_output).unwrap();
     assert!(watches.as_array().unwrap().is_empty());
+}
 
+fn stop_daemon(root: &Path) {
+    let pid = fs::read_to_string(root.join(".packet28/daemon/pid"))
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
     suite_cmd()
-        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .args(["daemon", "stop", "--root", root.to_str().unwrap()])
         .assert()
         .success();
+    let started = Instant::now();
+    while process_harness::process_alive(pid) {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "packet28d did not finish shutting down"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn test_daemon_task_submit_failed_submit_cleans_up_task_and_watches() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    setup_changed_repo(dir.path());
+    let spec_path = invalid_task_spec(dir.path());
+
+    start_daemon(dir.path());
+    submit_invalid_task(dir.path(), &spec_path);
+    assert_task_and_watches_absent(dir.path());
+    stop_daemon(dir.path());
+}
+
+#[test]
+#[cfg(unix)]
+fn test_daemon_task_submit_failed_submit_does_not_resurrect_after_restart() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    setup_changed_repo(dir.path());
+    let spec_path = invalid_task_spec(dir.path());
+
+    start_daemon(dir.path());
+    submit_invalid_task(dir.path(), &spec_path);
+    stop_daemon(dir.path());
+
+    start_daemon(dir.path());
+    assert_task_and_watches_absent(dir.path());
+    stop_daemon(dir.path());
 }

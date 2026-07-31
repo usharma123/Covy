@@ -1,41 +1,74 @@
 [workspace]
-members = ["crates/covy-core", "crates/covy-ingest", "crates/covy-cli", "crates/diffy-cli", "crates/testy-cli", "crates/suite-packet-core", "crates/suite-foundation-core", "crates/suite-policy-core", "crates/suite-proxy-core", "crates/suite-ingest", "crates/mapy-core", "crates/diffy-core", "crates/testy-core", "crates/suite-cli", "crates/testy-cli-common", "crates/guardy-core", "crates/contextq-core", "crates/context-kernel-core", "crates/context-memory-core", "crates/context-scheduler-core", "crates/stacky-core", "crates/buildy-core", "crates/context-instruct-shim", "crates/packet28-daemon-core", "crates/packet28-reducer-core", "crates/packet28-search-core", "crates/packet28-search-cli", "crates/packet28d"]
+members = ["crates/covy-core", "crates/covy-ingest", "crates/covy-cli", "crates/diffy-cli", "crates/testy-cli", "crates/packet28-binary-codec", "crates/packet28-state-fs", "crates/suite-packet-core", "crates/suite-foundation-core", "crates/suite-policy-core", "crates/suite-proxy-core", "crates/suite-ingest", "crates/mapy-core", "crates/diffy-core", "crates/testy-core", "crates/suite-cli", "crates/testy-cli-common", "crates/guardy-core", "crates/contextq-core", "crates/context-kernel-builtins", "crates/context-kernel-core", "crates/context-kernel-mechanism", "crates/context-memory-core", "crates/context-scheduler-core", "crates/stacky-core", "crates/buildy-core", "crates/context-instruct-shim", "crates/packet28-daemon-client", "crates/packet28-daemon-core", "crates/packet28-daemon-protocol", "crates/packet28-reducer-core", "crates/packet28-search-core", "crates/packet28-search-cli", "crates/packet28d"]
 resolver = "2"
 
 [workspace.package]
 version = "0.2.63"
+publish = false
 edition = "2021"
 license = "MIT"
-rust-version = "1.75"
+rust-version = "1.88.0"
 description = "Fast Rust CLI for coverage and diagnostics gating"
 repository = "https://github.com/usharma123/Covy"
 homepage = "https://github.com/usharma123/Covy"
 
 [workspace.dependencies]
+# Workspace crates
+buildy-core = { version = "0.2.0", path = "crates/buildy-core" }
+context-kernel-builtins = { version = "0.2.0", path = "crates/context-kernel-builtins" }
+context-kernel-core = { version = "0.2.0", path = "crates/context-kernel-core" }
+context-kernel-mechanism = { version = "0.2.0", path = "crates/context-kernel-mechanism" }
+context-memory-core = { version = "0.2.0", path = "crates/context-memory-core" }
+context-scheduler-core = { version = "0.2.0", path = "crates/context-scheduler-core" }
+contextq-core = { version = "0.2.0", path = "crates/contextq-core" }
+covy-core = { version = "0.2.0", path = "crates/covy-core" }
+covy-ingest = { version = "0.2.0", path = "crates/covy-ingest" }
+diffy-core = { version = "0.2.0", path = "crates/diffy-core" }
+guardy-core = { version = "0.2.0", path = "crates/guardy-core" }
+mapy-core = { version = "0.2.0", path = "crates/mapy-core" }
+packet28-binary-codec = { version = "0.2.0", path = "crates/packet28-binary-codec" }
+packet28-state-fs = { version = "0.2.0", path = "crates/packet28-state-fs" }
+packet28-daemon-client = { version = "0.2.0", path = "crates/packet28-daemon-client" }
+packet28-daemon-core = { version = "0.2.0", path = "crates/packet28-daemon-core" }
+packet28-daemon-protocol = { version = "0.2.0", path = "crates/packet28-daemon-protocol" }
+packet28-reducer-core = { version = "0.2.0", path = "crates/packet28-reducer-core" }
+packet28-search-core = { version = "0.2.0", path = "crates/packet28-search-core" }
+stacky-core = { version = "0.2.0", path = "crates/stacky-core" }
+suite-foundation-core = { version = "0.2.0", path = "crates/suite-foundation-core" }
+suite-ingest = { version = "0.2.0", path = "crates/suite-ingest" }
+suite-packet-core = { version = "0.2.0", path = "crates/suite-packet-core" }
+suite-policy-core = { version = "0.2.0", path = "crates/suite-policy-core" }
+suite-proxy-core = { version = "0.2.0", path = "crates/suite-proxy-core" }
+testy-cli-common = { version = "0.2.0", path = "crates/testy-cli-common" }
+testy-core = { version = "0.2.0", path = "crates/testy-core" }
+
 # Core
 roaring = "0.10"
-blake3 = "1"
+blake3 = "1.4.0"
+constant_time_eq = "0.4"
 sha2 = "0.10"
-thiserror = "2"
-anyhow = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["raw_value"] }
-serde_yaml = "0.9"
+libc = "0.2.172"
+thiserror = "2.0.18"
+anyhow = "1.0.47"
+serde = { version = "1.0.204", features = ["derive"] }
+serde_json = { version = "1.0.137", features = ["raw_value"] }
+yaml_serde = "0.10.4"
 toml = "0.8"
-toml_edit = "0.22"
-bincode = "1"
-regex = "1"
-tracing = "0.1"
+toml_edit = "0.22.7"
+wincode-impl = { package = "wincode", version = "=0.4.2", features = ["derive"] }
+regex = "1.11.1"
+tracing = "0.1.29"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-rayon = "1"
+tokio = { version = "1.48", features = ["io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+rayon = "1.3"
 shell-words = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 # XML
-quick-xml = { version = "0.37", features = ["serialize"] }
+quick-xml = { version = "0.41", features = ["serialize"] }
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4.3.4", features = ["derive"] }
 colored = "3"
 comfy-table = "7"
 glob = "0.3"
@@ -45,12 +78,23 @@ notify = "8"
 ureq = { version = "3", features = ["json"] }
 
 # FS
-ignore = "0.4"
+ignore = "0.4.15"
 memmap2 = "0.9"
-regex-syntax = "0.8"
+regex-syntax = "0.8.5"
 
 # Dev
 tempfile = "3"
-assert_cmd = "2"
-predicates = "3"
+assert_cmd = "2.1.0"
+predicates = "3.0.1"
 criterion = { version = "0.5", features = ["html_reports"] }
+
+[workspace.lints.rust]
+future-incompatible = "warn"
+nonstandard-style = "warn"
+unsafe-op-in-unsafe-fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+missing-safety-doc = "deny"
+perf = { level = "warn", priority = -1 }
+undocumented-unsafe-blocks = "deny"

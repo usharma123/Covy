@@ -22,6 +22,13 @@ pub fn latest_handoff_path(root: &Path) -> PathBuf {
     root.join(LATEST_HANDOFF_RELATIVE_PATH)
 }
 
+pub(crate) fn contains_packet28_guidance(content: &str) -> bool {
+    content.contains("packet28.write_intention")
+        || content.contains("packet28.prepare_handoff")
+        || content.contains("Packet28 mcp serve")
+        || content.contains("hook claude")
+}
+
 pub fn mcp_command_example(root: Option<&str>) -> String {
     format!("Packet28 mcp serve{}", command_root_fragment(root),)
 }
@@ -43,8 +50,7 @@ pub fn render_prompt_fragment(format: AgentPromptFormat, root: Option<&str>) -> 
     let wrapper = wrapper_command_example();
     let root_note = if root.is_some() {
         format!(
-            "Use `--root {}` only when the agent is operating outside the repository root.",
-            ROOT_PLACEHOLDER
+            "Use `--root {ROOT_PLACEHOLDER}` only when the agent is operating outside the repository root."
         )
     } else {
         "Use `--root <path>` only when the agent is operating outside the repository root."

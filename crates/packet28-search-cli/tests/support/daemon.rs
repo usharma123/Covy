@@ -1,9 +1,9 @@
 use assert_cmd::Command;
-use packet28_daemon_core::{
-    read_socket_message, ready_path, socket_path, write_socket_message, DaemonRequest,
-    DaemonResponse,
-};
+use packet28_daemon_protocol::frame::{read_frame, write_frame};
+use packet28_daemon_protocol::message::{DaemonRequest, DaemonResponse};
+use packet28_daemon_protocol::paths::{ready_path, runtime_path, socket_path};
 use std::io::Read;
+use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, Stdio};
@@ -50,17 +50,51 @@ impl Drop for DaemonHandle {
 
 #[allow(clippy::zombie_processes)]
 pub fn start_daemon(root: &Path) -> DaemonHandle {
+    start_daemon_with_transport(root, false, None)
+}
+
+pub fn start_daemon_forced_tcp(root: &Path) -> DaemonHandle {
+    start_daemon_with_transport(root, true, None)
+}
+
+pub fn start_daemon_workspace_fallback(root: &Path) -> DaemonHandle {
+    let temporary_root = root.join("daemon-temp");
+    std::fs::create_dir(&temporary_root).unwrap();
+    // SAFETY: `geteuid` has no preconditions and retains no pointers.
+    let effective_uid = unsafe { libc::geteuid() };
+    let unauthentic_socket_parent =
+        temporary_root.join(format!("packet28d-sockets-{effective_uid}"));
+    std::fs::create_dir(&unauthentic_socket_parent).unwrap();
+    std::fs::set_permissions(
+        &unauthentic_socket_parent,
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    start_daemon_with_transport(root, false, Some(&temporary_root))
+}
+
+fn start_daemon_with_transport(
+    root: &Path,
+    force_tcp: bool,
+    temporary_root: Option<&Path>,
+) -> DaemonHandle {
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let mut child = ProcessCommand::new(daemon_bin())
+    let mut command = ProcessCommand::new(daemon_bin());
+    command
         .args(["serve", "--root", canonical_root.to_str().unwrap()])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    if force_tcp {
+        command.env("PACKET28D_FORCE_TCP", "1");
+    }
+    if let Some(temporary_root) = temporary_root {
+        command.env("TMPDIR", temporary_root);
+    }
+    let mut child = command.spawn().unwrap();
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(20) {
-        if ready_path(&canonical_root).exists() && socket_path(&canonical_root).exists() {
+        if ready_path(&canonical_root).exists() && runtime_path(&canonical_root).exists() {
             return DaemonHandle { child };
         }
         if let Some(status) = child.try_wait().unwrap() {
@@ -89,8 +123,8 @@ pub fn stop_daemon(root: &Path) {
         let reader_stream = stream.try_clone().unwrap();
         let mut writer = std::io::BufWriter::new(stream);
         let mut reader = std::io::BufReader::new(reader_stream);
-        let _ = write_socket_message(&mut writer, &DaemonRequest::Stop);
-        let _ = read_socket_message::<_, DaemonResponse>(&mut reader);
+        let _ = write_frame(&mut writer, &DaemonRequest::Stop);
+        let _ = read_frame::<_, DaemonResponse>(&mut reader);
     }
 }
 

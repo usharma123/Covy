@@ -204,46 +204,50 @@ pub(crate) fn now_unix() -> u64 {
 fn colon_diag_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(
+        compile_literal_regex(
             r"^(?P<file>[A-Za-z0-9_./\\-]+\.[A-Za-z0-9_+-]+):(?P<line>\d+):(?P<col>\d+):\s*(?P<severity>error|warning|note|info):\s*(?P<message>.*?)(?:\s+\[(?P<code>[^\]]+)\])?$",
         )
-        .unwrap()
     })
 }
 
 fn msvc_diag_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(
+        compile_literal_regex(
             r"^(?P<file>[A-Za-z0-9_./\\-]+\.[A-Za-z0-9_+-]+)\((?P<line>\d+),(?P<col>\d+)\):\s*(?P<severity>error|warning|note|info)\s*(?P<code>[A-Za-z0-9_]+)?:?\s*(?P<message>.*)$",
         )
-        .unwrap()
     })
 }
 
 fn rust_header_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(
+        compile_literal_regex(
             r"^(?P<severity>error|warning|note)(?:\[(?P<code>[^\]]+)\])?:\s*(?P<message>.*)$",
         )
-        .unwrap()
     })
 }
 
 fn rust_location_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(
+        compile_literal_regex(
             r"^\s*-->\s+(?P<file>[A-Za-z0-9_./\\-]+\.[A-Za-z0-9_+-]+):(?P<line>\d+):(?P<col>\d+)",
         )
-        .unwrap()
     })
 }
 
 fn numeric_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\d+").unwrap())
+    RE.get_or_init(|| compile_literal_regex(r"\d+"))
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "all callers pass compile-time regex literals covered by parser tests"
+)]
+fn compile_literal_regex(pattern: &str) -> Regex {
+    Regex::new(pattern).expect("hard-coded build-diagnostic regex must compile")
 }
 
 #[cfg(test)]

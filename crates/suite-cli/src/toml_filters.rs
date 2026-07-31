@@ -496,10 +496,18 @@ fn apply_filter(filter: &CompiledFilter, input: &str) -> String {
 }
 
 fn strip_ansi(value: &str) -> String {
-    Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-        .expect("valid ansi regex")
-        .replace_all(value, "")
-        .into_owned()
+    ansi_regex().replace_all(value, "").into_owned()
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "the compile-time ANSI escape regex is covered by filter tests"
+)]
+fn ansi_regex() -> &'static Regex {
+    static ANSI_REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    ANSI_REGEX.get_or_init(|| {
+        Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]").expect("hard-coded ANSI escape regex must compile")
+    })
 }
 
 fn truncate_chars(value: &str, max_chars: usize) -> String {

@@ -1,5 +1,11 @@
 #[path = "support/hypothesis.rs"]
 mod hypothesis;
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use hypothesis::{ensure_packet28d_built, init_repo, suite_cmd, write_repo_fixture};
 use predicates::prelude::*;
