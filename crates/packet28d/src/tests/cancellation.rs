@@ -383,7 +383,7 @@ fn initial_sequence_execution_rejects_stale_admission_generation() {
     assert!(stale_error.to_string().contains("cancelled"));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 
-    run_initial_sequence_for_task(state, task_id, replacement.generation).unwrap();
+    run_initial_sequence_for_task(state.clone(), task_id, replacement.generation).unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
@@ -514,7 +514,7 @@ fn cancel_between_steps_stops_the_next_reducer_and_suppresses_completion() {
     let run_thread =
         thread::spawn(move || run_sequence_for_task(state_for_run, "task-between-steps"));
     started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    let state_for_cancel = state;
+    let state_for_cancel = state.clone();
     let cancel_thread = thread::spawn(move || cancel_task(state_for_cancel, "task-between-steps"));
     wait_until_cancelled(&generation);
     release_tx.send(()).unwrap();

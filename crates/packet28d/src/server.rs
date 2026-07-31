@@ -1885,7 +1885,7 @@ mod tests {
     async fn handoff_wait_uses_owned_timer_deadline() {
         let state = crate::tests::support::daemon_test_state();
         let error = await_task_handoff(
-            state,
+            state.clone(),
             TaskAwaitHandoffRequest {
                 task_id: "task-await-timeout".to_string(),
                 timeout_ms: Some(100),
@@ -2184,7 +2184,7 @@ mod tests {
         ));
 
         let stats = handle_request(
-            state,
+            state.clone(),
             watch_tx,
             DaemonRequest::ContextStoreStats {
                 request: ContextStoreStatsRequest { root },

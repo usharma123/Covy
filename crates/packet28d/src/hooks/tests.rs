@@ -1,15 +1,25 @@
 use super::*;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::ops::Deref;
 
-static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+struct TestDaemonState {
+    state: Arc<Mutex<DaemonState>>,
+    _root: tempfile::TempDir,
+}
 
-fn test_state() -> Arc<Mutex<DaemonState>> {
-    let root = std::env::temp_dir().join(format!(
-        "packet28-hook-test-{}-{}",
-        now_unix_millis(),
-        TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-    fs::create_dir_all(&root).unwrap();
+impl Deref for TestDaemonState {
+    type Target = Arc<Mutex<DaemonState>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+fn test_state() -> TestDaemonState {
+    let test_root = tempfile::Builder::new()
+        .prefix("packet28-hook-test-")
+        .tempdir()
+        .unwrap();
+    let root = test_root.path().to_path_buf();
     ensure_daemon_dir(&root).unwrap();
     let kernel = Arc::new(Kernel::with_v1_reducers_and_persistence(
         PersistConfig::new(root.clone()),
@@ -26,7 +36,7 @@ fn test_state() -> Arc<Mutex<DaemonState>> {
         Duration::from_millis(TASK_PERSISTENCE_DEBOUNCE_MS),
     )
     .unwrap();
-    Arc::new(Mutex::new(DaemonState {
+    let state = Arc::new(Mutex::new(DaemonState {
         root,
         kernel,
         kernel_registry,
@@ -48,7 +58,23 @@ fn test_state() -> Arc<Mutex<DaemonState>> {
         shutdown: ShutdownSignal::new(),
         changes: StateChangeSignal::new(),
         shutting_down: false,
-    }))
+    }));
+    TestDaemonState {
+        state,
+        _root: test_root,
+    }
+}
+
+#[test]
+fn test_state_removes_temporary_root_when_dropped() {
+    let state = test_state();
+    let root = state.lock().unwrap().root.clone();
+    let surviving_state_reference = state.clone();
+
+    assert!(root.exists());
+    drop(state);
+    assert!(!root.exists());
+    drop(surviving_state_reference);
 }
 
 fn packet(summary: &str) -> packet28_daemon_protocol::hooks::HookReducerPacket {
@@ -103,7 +129,7 @@ fn missing_hook_runtime_config_keeps_ingest_enabled_by_default() {
     let state = test_state();
 
     let response = hook_ingest(
-        state,
+        state.clone(),
         HookIngestRequest {
             task_id: "task-missing-config".to_string(),
             ..HookIngestRequest::default()
@@ -341,7 +367,7 @@ fn infra_mutation_busts_cached_infra_reads() {
     .unwrap();
 
     let after_mutation = hook_ingest(
-        state,
+        state.clone(),
         HookIngestRequest {
             task_id: "task-infra-epoch".to_string(),
             reducer_packet: Some(read),
@@ -384,7 +410,7 @@ fn remote_state_cache_entries_expire() {
     }
 
     let after_ttl = hook_ingest(
-        state,
+        state.clone(),
         HookIngestRequest {
             task_id: "task-remote-ttl".to_string(),
             reducer_packet: Some(read),
@@ -461,7 +487,7 @@ fn edit_invalidation_busts_fs_cache() {
     .unwrap();
 
     let after_edit = hook_ingest(
-        state,
+        state.clone(),
         HookIngestRequest {
             task_id: "task-edit".to_string(),
             reducer_packet: Some(packet("first read")),
@@ -538,7 +564,7 @@ fn failed_edit_does_not_bust_fs_cache() {
     .unwrap();
 
     let after_failed_edit = hook_ingest(
-        state,
+        state.clone(),
         HookIngestRequest {
             task_id: "task-failed-edit".to_string(),
             reducer_packet: Some(packet("first read")),
@@ -652,7 +678,7 @@ fn edit_invalidation_busts_git_cache() {
     .unwrap();
 
     let after_edit = hook_ingest(
-        state,
+        state.clone(),
         HookIngestRequest {
             task_id: "task-git-edit".to_string(),
             reducer_packet: Some(git_packet),
@@ -885,7 +911,7 @@ fn threshold_level_returned_in_response() {
     pkt3.est_tokens = 30;
     pkt3.cache_fingerprint = Some("unique-level-3".to_string());
     let response = hook_ingest(
-        state,
+        state.clone(),
         HookIngestRequest {
             task_id: "task-level".to_string(),
             reducer_packet: Some(pkt3),
@@ -976,7 +1002,8 @@ fn relaunch_requested_when_daemon_managed_with_command() {
 
     // Stop boundary should trigger handoff + relaunch.
     let response =
-        prepare_handoff_from_hooks(state, "task-relaunch", HookBoundaryKind::Stop, None).unwrap();
+        prepare_handoff_from_hooks(state.clone(), "task-relaunch", HookBoundaryKind::Stop, None)
+            .unwrap();
     assert!(response.handoff_ready);
     assert!(response.relaunch_requested);
     assert_eq!(
@@ -1137,9 +1164,13 @@ fn relaunch_not_requested_when_host_managed() {
     )
     .unwrap();
 
-    let response =
-        prepare_handoff_from_hooks(state, "task-host-managed", HookBoundaryKind::Stop, None)
-            .unwrap();
+    let response = prepare_handoff_from_hooks(
+        state.clone(),
+        "task-host-managed",
+        HookBoundaryKind::Stop,
+        None,
+    )
+    .unwrap();
     assert!(response.handoff_ready);
     assert!(!response.relaunch_requested);
     assert_eq!(
