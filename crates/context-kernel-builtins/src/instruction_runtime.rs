@@ -349,7 +349,7 @@ pub(crate) fn instruction_stable_cache_input(input: &Value) -> Option<Value> {
     if request.mode != suite_packet_core::InstructionRenderMode::Stable {
         return None;
     }
-    let content_sha256 = format!("{:x}", Sha256::digest(request.content.as_bytes()));
+    let content_sha256 = hex::encode(Sha256::digest(request.content.as_bytes()));
     let stable_config = request.stable_config.normalized();
     let stable_config_sha256 = stable_config.fingerprint_sha256();
     Some(json!({
@@ -399,7 +399,7 @@ pub fn render_instruction(
     request: &InstructionSummaryRequest,
     snapshot: Option<&suite_packet_core::AgentSnapshotPayload>,
 ) -> Result<RenderedInstructionSummary, serde_json::Error> {
-    let content_sha256 = format!("{:x}", Sha256::digest(request.content.as_bytes()));
+    let content_sha256 = hex::encode(Sha256::digest(request.content.as_bytes()));
     let stable_config = request.stable_config.normalized();
     let stable_config_sha256 = stable_config.fingerprint_sha256();
     let snapshot_sha256 = if request.mode == suite_packet_core::InstructionRenderMode::Adaptive {
@@ -416,7 +416,7 @@ pub fn render_instruction(
             content_sha256,
             stable_config_sha256,
             snapshot_sha256,
-            rendered_sha256: format!("{:x}", Sha256::digest(summary_text.as_bytes())),
+            rendered_sha256: hex::encode(Sha256::digest(summary_text.as_bytes())),
             matched_terms: Vec::new(),
             section_titles: Vec::new(),
             summary_text,
@@ -543,7 +543,7 @@ pub fn render_instruction(
         content_sha256,
         stable_config_sha256,
         snapshot_sha256,
-        rendered_sha256: format!("{:x}", Sha256::digest(summary_text.as_bytes())),
+        rendered_sha256: hex::encode(Sha256::digest(summary_text.as_bytes())),
         matched_terms,
         section_titles,
         summary_text,
@@ -573,7 +573,7 @@ fn derive_focus_terms(
 
 fn adaptive_task_identity(task_label: &str) -> String {
     let normalized = stable_display_path(task_label);
-    let fingerprint = format!("{:x}", Sha256::digest(normalized.as_bytes()));
+    let fingerprint = hex::encode(Sha256::digest(normalized.as_bytes()));
     format!(
         "sha256-{}",
         fingerprint

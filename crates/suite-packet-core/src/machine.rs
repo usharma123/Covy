@@ -138,7 +138,7 @@ pub fn write_packet_artifact<T: Serialize + Clone>(
 
     let mut hasher = Sha256::new();
     hasher.update(&json);
-    let artifact_sha256 = format!("{:x}", hasher.finalize());
+    let artifact_sha256 = hex::encode(hasher.finalize());
     let created_at_unix = now_unix();
     let hash_prefix = envelope.hash.chars().take(16).collect::<String>();
     let handle_id = format!("{hash_prefix}-{created_at_unix}");

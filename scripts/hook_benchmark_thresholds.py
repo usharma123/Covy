@@ -30,7 +30,9 @@ DEFAULT_THRESHOLDS = {
                 "0 matches for",
             ],
         },
-        "gh_pr_list": {"min_reduction_pct": 80.0, "min_raw_tokens": 60},
+        # Small live PR listings are dominated by fixed compact-output framing,
+        # so their reduction percentage is not a stable regression signal.
+        "gh_pr_list": {"min_reduction_pct": 80.0, "min_raw_tokens": 100},
         "gh_pr_view": {"min_reduction_pct": 80.0, "min_raw_tokens": 100},
         "gh_run_list": {"min_reduction_pct": 80.0, "min_raw_tokens": 80},
         "gh_run_view": {"min_reduction_pct": 90.0, "min_raw_tokens": 200},

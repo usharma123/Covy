@@ -153,7 +153,7 @@ fn maybe_virtualize(
     let candidate = with_intercept_disabled(|| detect_candidate(path, dirfd))?;
     let bytes = with_intercept_disabled(|| fs::read(&candidate.absolute_path).ok())?;
     let content = String::from_utf8(bytes).ok()?;
-    let content_sha256 = format!("{:x}", Sha256::digest(content.as_bytes()));
+    let content_sha256 = hex::encode(Sha256::digest(content.as_bytes()));
     let response = with_intercept_disabled(|| {
         resolve_instruction_file(
             &candidate.root,

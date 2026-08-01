@@ -128,7 +128,7 @@ impl InstructionStableConfig {
             canonical.push_str(&term);
             canonical.push('\n');
         }
-        format!("{:x}", Sha256::digest(canonical.as_bytes()))
+        hex::encode(Sha256::digest(canonical.as_bytes()))
     }
 }
 
@@ -369,7 +369,7 @@ pub fn instruction_snapshot_sha256(
     });
     canonicalize_json(&mut value);
     let bytes = serde_json::to_vec(&value)?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 /// Returns the canonical bounded terms that can affect adaptive rendering.
