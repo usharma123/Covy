@@ -95,7 +95,16 @@ pub(super) fn shell_escape(value: String) -> String {
 }
 
 pub(super) fn generated_packet28_hook_command(runtime: &str, root: &Path) -> String {
-    guarded_packet28_hook_command(&resolve_packet28_cli_command(), runtime, root)
+    let command = resolve_packet28_cli_command();
+    if runtime == "claude" {
+        let command_arg = shell_escape(command);
+        return guarded_packet28_hook_command_with_root_arg(
+            &command_arg,
+            runtime,
+            "${CLAUDE_PROJECT_DIR}",
+        );
+    }
+    guarded_packet28_hook_command(&command, runtime, root)
 }
 
 pub(super) fn guarded_packet28_hook_command(
@@ -105,8 +114,16 @@ pub(super) fn guarded_packet28_hook_command(
 ) -> String {
     let command_arg = shell_escape(packet28_command.to_string());
     let root_arg = shell_escape(root.display().to_string());
+    guarded_packet28_hook_command_with_root_arg(&command_arg, runtime, &root_arg)
+}
+
+fn guarded_packet28_hook_command_with_root_arg(
+    packet28_command: &str,
+    runtime: &str,
+    root_arg: &str,
+) -> String {
     format!(
-        "sh -c 'if [ -x \"$1\" ] || command -v \"$1\" >/dev/null 2>&1; then exec \"$1\" hook {runtime} --root \"$2\"; fi; exit 0' packet28-hook \"{command_arg}\" \"{root_arg}\""
+        "sh -c 'if [ -x \"$1\" ] || command -v \"$1\" >/dev/null 2>&1; then exec \"$1\" hook {runtime} --root \"$2\"; fi; exit 0' packet28-hook \"{packet28_command}\" \"{root_arg}\""
     )
 }
 

@@ -39,6 +39,19 @@ fn test_setup_cursor_writes_rules_hooks_and_mcp_without_legacy_cursorrules() {
         .join("packet28.mdc")
         .exists());
     assert!(!root.path().join(".cursorrules").exists());
+    let mcp: Value = serde_json::from_str(
+        &fs::read_to_string(root.path().join(".cursor").join("mcp.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(mcp["mcpServers"]["packet28"]["args"][1], ".");
+    let rules = fs::read_to_string(
+        root.path()
+            .join(".cursor")
+            .join("rules")
+            .join("packet28.mdc"),
+    )
+    .unwrap();
+    assert!(!rules.contains(root.path().to_str().unwrap()));
 
     suite_cmd()
         .current_dir(root.path())

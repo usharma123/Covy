@@ -56,7 +56,7 @@ fn detect(environment: &RuntimeEnvironment<'_>) -> bool {
 }
 
 fn configure_mcp(environment: &RuntimeEnvironment<'_>, auto_yes: bool) -> Result<McpConfigStatus> {
-    crate::cmd_setup::write_mcp_config_with_label(
+    crate::cmd_setup::write_user_mcp_config_with_label(
         &mcp_config_path(environment.home()),
         environment.root(),
         auto_yes,
