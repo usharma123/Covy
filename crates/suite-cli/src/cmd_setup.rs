@@ -127,6 +127,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     let mut prompt_targets = Vec::new();
     let mut mcp_configured = false;
     let mut hook_configured = false;
+    let mut hook_service_configured = false;
     let mut any_hook_runtime_configs_written = false;
     let mut agent_files_ready = false;
     let mut exit_code = 0;
@@ -191,6 +192,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
             match hooks.configure(&runtime_environment, auto_apply)? {
                 McpConfigStatus::Written => {
                     hook_configured = true;
+                    hook_service_configured |= rt.adapter.writes_hook_runtime_config;
                     if rt.adapter.writes_hook_runtime_config {
                         any_hook_runtime_configs_written = true;
                     }
@@ -203,6 +205,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
                 }
                 McpConfigStatus::AlreadyConfigured => {
                     hook_configured = true;
+                    hook_service_configured |= rt.adapter.writes_hook_runtime_config;
                     if rt.adapter.writes_hook_runtime_config {
                         any_hook_runtime_configs_written = true;
                     }
@@ -247,6 +250,14 @@ pub fn run(args: SetupArgs) -> Result<i32> {
                 }
             }
         }
+        if hook_service_configured {
+            crate::cmd_hook_http::ensure_hook_http_server_for_root(&root)
+                .context("failed to start the runtime HTTP hook service during setup")?;
+            println!(
+                "    {} Runtime HTTP hook service is healthy",
+                "✓".green().bold()
+            );
+        }
         println!();
     }
 
@@ -264,11 +275,10 @@ pub fn run(args: SetupArgs) -> Result<i32> {
         "Write Instruction Files",
         "Refresh the prompt fragments each runtime reads from this repo.",
     );
-    let root_str = if root_display == "." {
-        None
-    } else {
-        Some(root_display.as_str())
-    };
+    // These files live inside the configured workspace and are consumed with
+    // that workspace as the runtime cwd. Keep their examples relative so a
+    // clone, rename, or move does not preserve the installer's absolute path.
+    let root_str = None;
 
     for target in &prompt_targets {
         let content = agent_surface::render_prompt_fragment(target.format, root_str);
@@ -673,20 +683,14 @@ pub(crate) fn write_mcp_config(
 
 pub(crate) fn write_mcp_config_with_label(
     path: &Path,
-    root: &Path,
+    _root: &Path,
     auto_yes: bool,
     runtime_name: Option<&str>,
 ) -> Result<McpConfigStatus> {
-    let root_arg = if root == Path::new(".") {
-        ".".to_string()
-    } else {
-        root.display().to_string()
-    };
-
     let command = resolve_packet28_mcp_command();
     let packet28_entry = json!({
         "command": command,
-        "args": ["--root", root_arg, "--toolset", "core"]
+        "args": ["--root", ".", "--toolset", "core"]
     });
 
     // Read existing config or start fresh

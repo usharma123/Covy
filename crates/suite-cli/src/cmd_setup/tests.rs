@@ -190,18 +190,35 @@ fn write_claude_hook_config_installs_packet28_hooks() {
         value["hooks"]["SessionStart"][0]["hooks"][0]["type"].as_str(),
         Some("command")
     );
+    let session_start_command = value["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    assert!(session_start_command.contains("${CLAUDE_PROJECT_DIR}"));
+    assert!(!session_start_command.contains(dir.path().to_str().unwrap()));
+    assert_eq!(
+        value["hooks"]["SessionStart"][0]["matcher"].as_str(),
+        Some("startup|resume|clear|compact|fork")
+    );
     assert_eq!(
         value["hooks"]["UserPromptSubmit"][0]["hooks"][0]["type"].as_str(),
         Some("command")
     );
+    assert!(value["hooks"]["UserPromptSubmit"][0]
+        .get("matcher")
+        .is_none());
     assert_eq!(
         value["hooks"]["PreToolUse"][0]["hooks"][0]["type"].as_str(),
         Some("http")
     );
     assert_eq!(
+        value["hooks"]["PreToolUse"][0]["matcher"].as_str(),
+        Some("*")
+    );
+    assert_eq!(
         value["hooks"]["Stop"][0]["hooks"][0]["type"].as_str(),
         Some("http")
     );
+    assert!(value["hooks"]["Stop"][0].get("matcher").is_none());
     let http_url = value["hooks"]["PreToolUse"][0]["hooks"][0]["url"]
         .as_str()
         .unwrap();
@@ -214,6 +231,21 @@ fn write_claude_hook_config_installs_packet28_hooks() {
             .filter_map(Value::as_str)
             .collect::<Vec<_>>(),
         vec![http_url]
+    );
+}
+
+#[test]
+fn project_mcp_config_uses_relocation_safe_root() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(".mcp.json");
+
+    let status = write_mcp_config(&path, dir.path(), true).unwrap();
+
+    assert!(matches!(status, McpConfigStatus::Written));
+    let value: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(
+        value["mcpServers"]["packet28"]["args"],
+        json!(["--root", ".", "--toolset", "core"])
     );
 }
 

@@ -102,15 +102,15 @@ pub(crate) fn write_claude_hook_config(
 
 fn build_claude_packet28_hooks(command: &str, http_url: &str, http_token: &str) -> Value {
     json!({
-        "SessionStart": [claude_command_hook_entry("startup|resume|clear|compact", command)],
-        "UserPromptSubmit": [claude_command_hook_entry(".*", command)],
-        "PreToolUse": [claude_http_hook_entry(".*", http_url, http_token)],
-        "PostToolUse": [claude_http_hook_entry(".*", http_url, http_token)],
-        "PostToolUseFailure": [claude_http_hook_entry(".*", http_url, http_token)],
-        "Stop": [claude_http_hook_entry(".*", http_url, http_token)],
-        "SubagentStop": [claude_http_hook_entry(".*", http_url, http_token)],
-        "PreCompact": [claude_http_hook_entry("manual|auto", http_url, http_token)],
-        "SessionEnd": [claude_http_hook_entry(".*", http_url, http_token)]
+        "SessionStart": [claude_command_hook_entry(Some("startup|resume|clear|compact|fork"), command)],
+        "UserPromptSubmit": [claude_command_hook_entry(None, command)],
+        "PreToolUse": [claude_http_hook_entry(Some("*"), http_url, http_token)],
+        "PostToolUse": [claude_http_hook_entry(Some("*"), http_url, http_token)],
+        "PostToolUseFailure": [claude_http_hook_entry(Some("*"), http_url, http_token)],
+        "Stop": [claude_http_hook_entry(None, http_url, http_token)],
+        "SubagentStop": [claude_http_hook_entry(Some("*"), http_url, http_token)],
+        "PreCompact": [claude_http_hook_entry(Some("manual|auto"), http_url, http_token)],
+        "SessionEnd": [claude_http_hook_entry(Some("*"), http_url, http_token)]
     })
 }
 
@@ -131,16 +131,18 @@ fn is_packet28_claude_hook_entry(entry: &Value) -> bool {
     })
 }
 
-fn claude_command_hook_entry(matcher: &str, command: &str) -> Value {
-    json!({
-        "matcher": matcher,
+fn claude_command_hook_entry(matcher: Option<&str>, command: &str) -> Value {
+    let mut entry = json!({
         "hooks": [{"type": "command", "command": command}]
-    })
+    });
+    if let Some(matcher) = matcher {
+        entry["matcher"] = Value::String(matcher.to_string());
+    }
+    entry
 }
 
-fn claude_http_hook_entry(matcher: &str, http_url: &str, http_token: &str) -> Value {
-    json!({
-        "matcher": matcher,
+fn claude_http_hook_entry(matcher: Option<&str>, http_url: &str, http_token: &str) -> Value {
+    let mut entry = json!({
         "hooks": [{
             "type": "http",
             "url": http_url,
@@ -148,7 +150,11 @@ fn claude_http_hook_entry(matcher: &str, http_url: &str, http_token: &str) -> Va
                 (PACKET28_CLAUDE_HTTP_TOKEN_HEADER): http_token
             }
         }]
-    })
+    });
+    if let Some(matcher) = matcher {
+        entry["matcher"] = Value::String(matcher.to_string());
+    }
+    entry
 }
 
 fn ensure_hook_http_settings_written(

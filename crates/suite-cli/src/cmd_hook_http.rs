@@ -74,6 +74,31 @@ pub(crate) fn ensure_hook_http_server(
     wait_for_hook_http_server(root, &settings, HOOK_HTTP_START_TIMEOUT)
 }
 
+pub(crate) fn ensure_hook_http_server_for_root(root: &Path) -> Result<()> {
+    let runtime_config = load_hook_http_runtime_config(root)?;
+    ensure_hook_http_server(root, &runtime_config)
+}
+
+pub(crate) fn check_hook_http_server(root: &Path) -> Result<()> {
+    let runtime_config = load_hook_http_runtime_config(root)?;
+    let settings = hook_http_settings(&runtime_config)
+        .context("Packet28 Claude HTTP hook settings are incomplete")?;
+    if hook_http_server_healthy(root, &settings).unwrap_or(false) {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "Packet28 Claude HTTP hook server is not healthy at {}",
+        hook_http_health_url(&settings)
+    ))
+}
+
+fn load_hook_http_runtime_config(root: &Path) -> Result<HookRuntimeConfig> {
+    let path = packet28_daemon_protocol::paths::hook_runtime_config_path(root);
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read '{}'", path.display()))?;
+    serde_json::from_str(&content).with_context(|| format!("invalid JSON in '{}'", path.display()))
+}
+
 fn hook_http_settings(runtime_config: &HookRuntimeConfig) -> Option<HookHttpSettings> {
     let token = runtime_config
         .http_hook_token
