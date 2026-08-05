@@ -675,22 +675,31 @@ fn prompt_menu_selection(prompt: &str, max: usize, default: usize) -> Result<Opt
 
 pub(crate) fn write_mcp_config(
     path: &Path,
-    root: &Path,
+    _root: &Path,
     auto_yes: bool,
 ) -> Result<McpConfigStatus> {
-    write_mcp_config_with_label(path, root, auto_yes, None)
+    write_mcp_config_with_root_arg(path, ".", auto_yes, None)
 }
 
-pub(crate) fn write_mcp_config_with_label(
+pub(crate) fn write_user_mcp_config_with_label(
     path: &Path,
-    _root: &Path,
+    root: &Path,
+    auto_yes: bool,
+    runtime_name: Option<&str>,
+) -> Result<McpConfigStatus> {
+    write_mcp_config_with_root_arg(path, &root.display().to_string(), auto_yes, runtime_name)
+}
+
+fn write_mcp_config_with_root_arg(
+    path: &Path,
+    root_arg: &str,
     auto_yes: bool,
     runtime_name: Option<&str>,
 ) -> Result<McpConfigStatus> {
     let command = resolve_packet28_mcp_command();
     let packet28_entry = json!({
         "command": command,
-        "args": ["--root", ".", "--toolset", "core"]
+        "args": ["--root", root_arg, "--toolset", "core"]
     });
 
     // Read existing config or start fresh
