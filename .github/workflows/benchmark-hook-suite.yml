@@ -66,7 +66,7 @@ jobs:
           sudo apt-get install --no-install-recommends ripgrep
 
       - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
 
       - name: Build benchmark dependencies
         run: cargo build --locked -p suite-cli -p packet28d -p packet28-reducer-core -p packet28-search-cli
