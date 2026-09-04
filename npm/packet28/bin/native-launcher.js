@@ -74,7 +74,7 @@ function resolveNative(name, { overrideEnv, searchPath }) {
 export async function launchNative(
   name,
   args,
-  { label = name, overrideEnv, searchPath = true } = {},
+  { label = name, overrideEnv, pipeStdin = false, searchPath = true } = {},
 ) {
   let binary;
   try {
@@ -89,9 +89,21 @@ export async function launchNative(
   }
 
   const child = spawn(binary, args, {
-    stdio: "inherit",
+    stdio: [pipeStdin ? "pipe" : "inherit", "inherit", "inherit"],
     env: { ...process.env, PACKET28_MANAGED_BY_NPM: "1" },
   });
+  const handleChildStdinError = (error) => {
+    if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") {
+      console.error(`Failed to forward stdin to ${label}: ${error.message}`);
+    }
+  };
+  if (pipeStdin) {
+    // Keep the native MCP server behind a launcher-owned pipe. If an agent
+    // runtime force-kills only this Node process, the native child receives
+    // EOF instead of retaining the runtime's still-open stdin descriptor.
+    child.stdin.on("error", handleChildStdinError);
+    process.stdin.pipe(child.stdin);
+  }
   const forwarders = new Map();
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     const forward = () => {
@@ -115,6 +127,10 @@ export async function launchNative(
   });
   for (const [signal, forward] of forwarders) {
     process.off(signal, forward);
+  }
+  if (pipeStdin) {
+    process.stdin.unpipe(child.stdin);
+    child.stdin.off("error", handleChildStdinError);
   }
   if (result.error) {
     console.error(`Failed to start ${label}: ${result.error.message}`);

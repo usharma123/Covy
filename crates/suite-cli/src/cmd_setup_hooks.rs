@@ -102,7 +102,10 @@ pub(crate) fn write_claude_hook_config(
 
 fn build_claude_packet28_hooks(command: &str, http_url: &str, http_token: &str) -> Value {
     json!({
-        "SessionStart": [claude_command_hook_entry(Some("startup|resume|clear|compact|fork"), command)],
+        "SessionStart": [
+            claude_command_hook_entry(Some("startup|resume|clear|compact"), command),
+            claude_http_hook_entry(Some("fork"), http_url, http_token)
+        ],
         "UserPromptSubmit": [claude_command_hook_entry(None, command)],
         "PreToolUse": [claude_http_hook_entry(Some("*"), http_url, http_token)],
         "PostToolUse": [claude_http_hook_entry(Some("*"), http_url, http_token)],

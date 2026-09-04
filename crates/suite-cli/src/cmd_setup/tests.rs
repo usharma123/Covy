@@ -197,7 +197,15 @@ fn write_claude_hook_config_installs_packet28_hooks() {
     assert!(!session_start_command.contains(dir.path().to_str().unwrap()));
     assert_eq!(
         value["hooks"]["SessionStart"][0]["matcher"].as_str(),
-        Some("startup|resume|clear|compact|fork")
+        Some("startup|resume|clear|compact")
+    );
+    assert_eq!(
+        value["hooks"]["SessionStart"][1]["matcher"].as_str(),
+        Some("fork")
+    );
+    assert_eq!(
+        value["hooks"]["SessionStart"][1]["hooks"][0]["type"].as_str(),
+        Some("http")
     );
     assert_eq!(
         value["hooks"]["UserPromptSubmit"][0]["hooks"][0]["type"].as_str(),
@@ -223,6 +231,10 @@ fn write_claude_hook_config_installs_packet28_hooks() {
         .as_str()
         .unwrap();
     assert!(http_url.starts_with("http://127.0.0.1:"));
+    assert_eq!(
+        value["hooks"]["SessionStart"][1]["hooks"][0]["url"].as_str(),
+        Some(http_url)
+    );
     assert_eq!(
         value["allowedHttpHookUrls"]
             .as_array()
@@ -333,7 +345,11 @@ fn write_claude_hook_config_removes_stale_packet28_command_paths() {
 
     let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     let entries = value["hooks"]["SessionStart"].as_array().unwrap();
-    assert_eq!(entries.len(), 2);
+    assert_eq!(entries.len(), 3);
+    assert!(entries.iter().any(|entry| {
+        entry["matcher"].as_str() == Some("fork")
+            && entry["hooks"][0]["type"].as_str() == Some("http")
+    }));
     let commands = entries
         .iter()
         .filter_map(|entry| entry["hooks"][0]["command"].as_str())

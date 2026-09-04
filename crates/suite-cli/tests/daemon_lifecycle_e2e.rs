@@ -8,6 +8,7 @@ use std::net::TcpListener;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
+use std::sync::{Arc, Barrier};
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -68,6 +69,59 @@ fn test_daemon_lifecycle_cli_start_status_stop_cycle() {
         .is_some_and(|path| Path::new(path).exists()));
     assert!(dir.path().join(".packet28/daemon/ready").exists());
     assert!(dir.path().join(".packet28/daemon/packet28d.log").exists());
+
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_concurrent_daemon_clients_share_one_workspace_process() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    write_repo_fixture(dir.path());
+    init_repo(dir.path());
+
+    let clients = 16;
+    let barrier = Arc::new(Barrier::new(clients));
+    let root = Arc::new(dir.path().to_path_buf());
+    let workers = (0..clients)
+        .map(|_| {
+            let barrier = Arc::clone(&barrier);
+            let root = Arc::clone(&root);
+            std::thread::spawn(move || {
+                barrier.wait();
+                let output = suite_cmd()
+                    .args([
+                        "daemon",
+                        "status",
+                        "--root",
+                        root.to_str().unwrap(),
+                        "--json",
+                    ])
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "concurrent daemon client failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                serde_json::from_slice::<Value>(&output.stdout)
+                    .unwrap()
+                    .get("pid")
+                    .and_then(Value::as_u64)
+                    .unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let pids = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect::<Vec<_>>();
+    assert!(pids.iter().all(|pid| *pid == pids[0]));
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])

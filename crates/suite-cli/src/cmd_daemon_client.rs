@@ -4,6 +4,8 @@ use anyhow::{anyhow, Context, Result};
 #[cfg(unix)]
 use packet28_daemon_client::transport::{DaemonEndpoint, DaemonStream};
 use packet28_daemon_core::storage::read_runtime_info;
+#[cfg(unix)]
+use packet28_daemon_core::task_store_lease::acquire_daemon_startup_lease;
 use packet28_daemon_protocol::{
     commands::{
         CoverCheckRequest, CoverCheckResponse, PacketFetchRequest, PacketFetchResponse,
@@ -331,6 +333,10 @@ pub(crate) fn ensure_daemon(root: &Path) -> Result<()> {
     if daemon_status_existing(&root).is_ok() {
         return Ok(());
     }
+    let _startup_lease = acquire_daemon_startup_lease(&root)?;
+    if daemon_status_existing(&root).is_ok() {
+        return Ok(());
+    }
     let endpoint = daemon_endpoint(&root)?;
     if endpoint_may_have_stale_socket(&endpoint) && connect_daemon_endpoint(&endpoint).is_err() {
         cleanup_unreachable_runtime_files(&root)?;
@@ -369,7 +375,7 @@ fn start_daemon(root: &Path) -> Result<()> {
         .append(true)
         .open(&log_path)
         .with_context(|| format!("failed to open daemon log '{}'", log_path.display()))?;
-    Command::new(binary)
+    let mut child = Command::new(binary)
         .arg("serve")
         .arg("--root")
         .arg(root_arg)
@@ -378,6 +384,13 @@ fn start_daemon(root: &Path) -> Result<()> {
         .stderr(Stdio::from(stderr))
         .spawn()
         .context("failed to spawn packet28d")?;
+    let pid = child.id();
+    thread::Builder::new()
+        .name(format!("packet28d-reaper-{pid}"))
+        .spawn(move || {
+            let _ = child.wait();
+        })
+        .context("failed to start packet28d child reaper")?;
     Ok(())
 }
 
