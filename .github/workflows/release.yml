@@ -131,6 +131,7 @@ jobs:
             smoke_mode: native-or-metadata
             smoke_reason: "The hosted macOS runner may be ARM64; x86_64 execution requires an Intel runner or Rosetta and remains an external release check."
           - target: x86_64-unknown-linux-musl
+            shim_target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             platform: linux-x64
             npm_os: linux
@@ -138,6 +139,7 @@ jobs:
             smoke_mode: native
             smoke_reason: ""
           - target: aarch64-unknown-linux-musl
+            shim_target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             platform: linux-arm64
             npm_os: linux
@@ -163,8 +165,8 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      - name: Install cross (Linux ARM64)
-        if: matrix.target == 'aarch64-unknown-linux-musl'
+      - name: Install cross (Linux)
+        if: matrix.npm_os == 'linux'
         run: cargo install cross --git https://github.com/cross-rs/cross --rev 88f49ff79e777bef6d3564531636ee4d3cc2f8d2 --locked
 
       - name: Install qemu user emulator (Linux ARM64)
@@ -183,11 +185,9 @@ jobs:
             cargo build --release --locked --target ${{ matrix.target }} --workspace $BIN_ARGS
           fi
           if [ "${{ matrix.npm_os }}" = "linux" ]; then
-            if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
-              cross build --release --locked --target ${{ matrix.target }} --package context-instruct-shim
-            else
-              cargo build --release --locked --target ${{ matrix.target }} --package context-instruct-shim
-            fi
+            # The CLI is static musl; the preload library must be a shared
+            # library for the GNU libc used by the processes it interposes.
+            cross build --release --locked --target "${{ matrix.shim_target }}" --package context-instruct-shim
           fi
 
       - name: Stage platform package
@@ -196,7 +196,11 @@ jobs:
           mkdir -p "$PKG_DIR/bin"
 
           while IFS= read -r artifact; do
-            cp "target/${{ matrix.target }}/release/$artifact" "$PKG_DIR/bin/"
+            ARTIFACT_TARGET="${{ matrix.target }}"
+            if [ "$artifact" = "libcontext_instruct_shim.so" ]; then
+              ARTIFACT_TARGET="${{ matrix.shim_target }}"
+            fi
+            cp "target/$ARTIFACT_TARGET/release/$artifact" "$PKG_DIR/bin/"
             chmod +x "$PKG_DIR/bin/$artifact"
           done < <(
             python3 scripts/release_artifacts.py platform \

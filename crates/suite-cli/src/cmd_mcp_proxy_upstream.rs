@@ -1718,7 +1718,9 @@ while True:
     message = read_message()
     if message is None:
         break
-    if message.get("method") == "test/reverse":
+    if message.get("method") == "test/exit":
+        os._exit(17)
+    elif message.get("method") == "test/reverse":
         params = message.get("params", {})
         reverse_request = {
             "jsonrpc": "2.0",
@@ -3036,7 +3038,7 @@ while True:
     async fn child_exit_drains_reverse_request_and_consumes_late_response() {
         let (_directory, client, mut output) = reverse_test_client(1_000).await;
         client
-            .send_message(&trigger_reverse_request(true))
+            .send_message(&trigger_reverse_request(false))
             .await
             .unwrap();
         let forwarded = tokio::time::timeout(Duration::from_secs(1), output.recv())
@@ -3046,6 +3048,12 @@ while True:
             .value;
         let proxy_id = forwarded["id"].clone();
 
+        // Wait for forwarding before exiting: otherwise child reaping can
+        // correctly close the output channel before the reader sees the frame.
+        client
+            .send_message(&json!({"jsonrpc": "2.0", "method": "test/exit"}))
+            .await
+            .unwrap();
         wait_until_reaped_and_reverse_requests_drained(&client).await;
         let late_was_consumed = client
             .forward_client_response(&json!({
