@@ -6757,8 +6757,8 @@ fn remove_journal_less_transient_group(
     let [entry] = entries else {
         return Ok(false);
     };
-    if !quarantine_transient_kind(entry)
-        .is_some_and(|kind| !matches!(kind, QuarantineTransientKind::AmbiguousGeneratedDeletion))
+    if quarantine_transient_kind(entry)
+        .is_none_or(|kind| matches!(kind, QuarantineTransientKind::AmbiguousGeneratedDeletion))
     {
         return Ok(false);
     }

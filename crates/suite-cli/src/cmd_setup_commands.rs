@@ -1,89 +1,31 @@
 use std::path::Path;
 
-use packet28_daemon_protocol::hooks::{HookRuntimeConfig, RelaunchPreference};
+use packet28_daemon_protocol::hooks::{
+    is_legacy_generated_relaunch_command, HookRuntimeConfig, RelaunchPreference,
+};
 
-pub(super) fn apply_generated_relaunch_command(
-    config: &mut HookRuntimeConfig,
-    _root: &Path,
-    packet28_agent: Option<String>,
-) -> bool {
-    let should_manage_existing = config.relaunch_command.is_empty()
-        || is_generated_relaunch_command(&config.relaunch_command);
-    if !should_manage_existing {
+/// Setup never enables daemon-managed relaunch on its own any more.
+///
+/// Earlier releases wrote `relaunch_preference = daemon_managed` with a
+/// generated `claude --continue` (or `packet28-agent`) command whenever
+/// `packet28-agent` was on PATH. That made every `Stop`/`SubagentStop` boundary
+/// spawn a headless `claude --continue` that resumed the user's live session
+/// and multiplied processes on multi-agent runs. This helper migrates those
+/// stale configs back to host-managed and leaves user-authored commands alone.
+pub(super) fn apply_generated_relaunch_command(config: &mut HookRuntimeConfig) -> bool {
+    let managed_by_setup = config.relaunch_command.is_empty()
+        || is_legacy_generated_relaunch_command(&config.relaunch_command);
+    if !managed_by_setup {
         return false;
     }
-    match packet28_agent {
-        Some(_) => {
-            let desired_command = generated_relaunch_command();
-            if config.relaunch_preference == RelaunchPreference::DaemonManaged
-                && config.relaunch_command == desired_command
-            {
-                return false;
-            }
-            config.relaunch_preference = RelaunchPreference::DaemonManaged;
-            config.relaunch_command = desired_command;
-            true
-        }
-        None => {
-            if config.relaunch_preference == RelaunchPreference::HostManaged
-                && config.relaunch_command.is_empty()
-            {
-                return false;
-            }
-            config.relaunch_preference = RelaunchPreference::HostManaged;
-            config.relaunch_command.clear();
-            true
-        }
+    if config.relaunch_preference == RelaunchPreference::HostManaged
+        && config.relaunch_command.is_empty()
+    {
+        return false;
     }
-}
-
-pub(super) fn generated_relaunch_command() -> Vec<String> {
-    // The daemon's task_launch_agent path already prepares and consumes the
-    // handoff before spawning this command. Launch the delegated runtime
-    // directly so packet28-agent does not wait for and consume it a second time.
-    vec!["claude".to_string(), "--continue".to_string()]
-}
-
-fn is_generated_relaunch_command(command: &[String]) -> bool {
-    command == generated_relaunch_command()
-        || command
-            .first()
-            .map(|value| {
-                Path::new(value)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or(value)
-                    == "packet28-agent"
-            })
-            .unwrap_or(false)
-}
-
-pub(super) fn resolve_packet28_agent_command() -> Option<String> {
-    if let Ok(path) = std::env::var("CARGO_BIN_EXE_packet28-agent") {
-        if !path.trim().is_empty() {
-            return Some(path);
-        }
-    }
-    if let Ok(current) = std::env::current_exe() {
-        if let Some(parent) = current.parent() {
-            let sibling = parent.join("packet28-agent");
-            if sibling.exists() {
-                return Some(sibling.display().to_string());
-            }
-        }
-    }
-    let output = std::process::Command::new("which")
-        .arg("packet28-agent")
-        .output();
-    if let Ok(output) = output {
-        if output.status.success() {
-            let command = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !command.is_empty() {
-                return Some(command);
-            }
-        }
-    }
-    None
+    config.relaunch_preference = RelaunchPreference::HostManaged;
+    config.relaunch_command.clear();
+    true
 }
 
 pub(super) fn shell_escape(value: String) -> String {

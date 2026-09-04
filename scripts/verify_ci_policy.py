@@ -477,8 +477,11 @@ def release_package_smoke_errors(
         "release publish": release_publish_job,
     }
     for job_name, job in node_jobs.items():
-        if node_action not in job or "node-version: 20.20.2" not in job:
-            errors.append(f"{job_name} must pin the reviewed Node 20.20.2 action")
+        version = "24.16.0" if job_name == "release publish" else "20.20.2"
+        if node_action not in job or f"node-version: {version}" not in job:
+            errors.append(f"{job_name} must pin the reviewed Node {version} action")
+    if "NODE_AUTH_TOKEN:" in release_publish_job or "secrets.NPM_TOKEN" in release_publish_job:
+        errors.append("release publish must use OIDC without an npm token")
 
     expected_modes = {
         "smoke_mode: native": 2,

@@ -414,6 +414,23 @@ fn wait_for_daemon(root: &Path, timeout: Duration) -> Result<()> {
     Err(anyhow!("packet28d did not become ready"))
 }
 
+/// Stop the workspace daemon if it is running and wait for its socket to go
+/// away. Returns `Ok(true)` when a daemon was reachable and asked to stop.
+#[cfg(unix)]
+pub(crate) fn stop_daemon_and_wait(root: &Path) -> Result<bool> {
+    let root = normalize_daemon_root(root);
+    let was_running = daemon_status_existing(&root).is_ok();
+    stop_daemon_if_running(&root)?;
+    wait_for_daemon_shutdown(&root, Duration::from_secs(5))?;
+    cleanup_unreachable_runtime_files(&root)?;
+    Ok(was_running)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn stop_daemon_and_wait(_root: &Path) -> Result<bool> {
+    Ok(false)
+}
+
 #[cfg(unix)]
 pub(crate) fn restart_daemon(root: &Path) -> Result<()> {
     let root = normalize_daemon_root(root);

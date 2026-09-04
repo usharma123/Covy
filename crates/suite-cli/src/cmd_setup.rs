@@ -39,8 +39,8 @@ pub(crate) mod setup_commands;
 use setup_commands::resolve_packet28_mcp_command;
 #[cfg(test)]
 use setup_commands::{
-    apply_generated_relaunch_command, generated_relaunch_command, guarded_packet28_hook_command,
-    resolve_packet28_cli_command, shell_escape,
+    apply_generated_relaunch_command, guarded_packet28_hook_command, resolve_packet28_cli_command,
+    shell_escape,
 };
 #[path = "cmd_setup_hooks.rs"]
 pub(crate) mod setup_hooks;
@@ -371,6 +371,13 @@ pub fn run(args: SetupArgs) -> Result<i32> {
                                 "    {} index still building ({})",
                                 "·".yellow().bold(),
                                 render_setup_index_progress(&response)
+                            );
+                        }
+                        SetupIndexVerification::Deferred => {
+                            println!(
+                                "    {} index deferred: commit or stash workspace changes, including the setup files, then run `Packet28 daemon index rebuild --root {}`",
+                                "·".yellow().bold(),
+                                root_display
                             );
                         }
                         SetupIndexVerification::Failed { response, reason } => {

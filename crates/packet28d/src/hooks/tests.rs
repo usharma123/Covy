@@ -1,4 +1,5 @@
 use super::*;
+use packet28_daemon_protocol::hooks::RelaunchPreference;
 use std::ops::Deref;
 
 struct TestDaemonState {
@@ -951,12 +952,10 @@ fn host_budget_override_affects_threshold_calculation() {
 }
 
 #[test]
-fn relaunch_preference_daemon_managed_is_default() {
+fn relaunch_preference_host_managed_is_default() {
     let config = HookRuntimeConfig::default();
-    assert_eq!(
-        config.relaunch_preference,
-        RelaunchPreference::DaemonManaged
-    );
+    assert_eq!(config.relaunch_preference, RelaunchPreference::HostManaged);
+    assert!(!config.daemon_relaunch_enabled());
 }
 
 #[test]
@@ -1176,5 +1175,96 @@ fn relaunch_not_requested_when_host_managed() {
     assert_eq!(
         response.relaunch_preference,
         RelaunchPreference::HostManaged
+    );
+}
+
+fn seed_relaunch_ready_task(
+    state: &Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    config: &HookRuntimeConfig,
+) {
+    let root = state.lock().unwrap().root.clone();
+    let config_path = packet28_daemon_protocol::paths::hook_runtime_config_path(&root);
+    std::fs::write(&config_path, serde_json::to_string_pretty(config).unwrap()).unwrap();
+
+    let mut pkt = packet("big read");
+    pkt.est_tokens = 80;
+    pkt.cache_fingerprint = Some(format!("unique-{task_id}"));
+    let _ = hook_ingest(
+        state.clone(),
+        HookIngestRequest {
+            task_id: task_id.to_string(),
+            reducer_packet: Some(pkt),
+            ..HookIngestRequest::default()
+        },
+    )
+    .unwrap();
+    let _ = broker_write_state(
+        state.clone(),
+        BrokerWriteStateRequest {
+            task_id: task_id.to_string(),
+            op: Some(BrokerWriteOp::Intention),
+            text: Some("Continue work".to_string()),
+            refresh_context: Some(false),
+            ..BrokerWriteStateRequest::default()
+        },
+    )
+    .unwrap();
+}
+
+/// Regression: a subagent finishing must never relaunch a fresh worker. The
+/// parent session is still alive, so spawning `claude --continue` here hijacks
+/// the live conversation and multiplies processes on multi-agent runs.
+#[test]
+fn relaunch_not_requested_on_subagent_stop() {
+    let state = test_state();
+    let config = HookRuntimeConfig {
+        context_budget_tokens: 100,
+        relaunch_preference: RelaunchPreference::DaemonManaged,
+        relaunch_command: vec!["true".to_string()],
+        ..HookRuntimeConfig::default()
+    };
+    seed_relaunch_ready_task(&state, "task-subagent-stop", &config);
+
+    let response = prepare_handoff_from_hooks(
+        state.clone(),
+        "task-subagent-stop",
+        HookBoundaryKind::SubagentStop,
+        None,
+    )
+    .unwrap();
+    assert!(response.handoff_ready);
+    assert!(
+        !response.relaunch_requested,
+        "SubagentStop must not queue a daemon relaunch"
+    );
+}
+
+/// Regression: the setup-generated `claude --continue` command (and the older
+/// `packet28-agent` wrapper) are not valid headless relaunch targets. Stale
+/// configs written by earlier releases must not trigger a relaunch even when
+/// the preference still says daemon-managed.
+#[test]
+fn relaunch_not_requested_for_legacy_generated_command() {
+    let state = test_state();
+    let config = HookRuntimeConfig {
+        context_budget_tokens: 100,
+        relaunch_preference: RelaunchPreference::DaemonManaged,
+        relaunch_command: vec!["claude".to_string(), "--continue".to_string()],
+        ..HookRuntimeConfig::default()
+    };
+    seed_relaunch_ready_task(&state, "task-legacy-relaunch", &config);
+
+    let response = prepare_handoff_from_hooks(
+        state.clone(),
+        "task-legacy-relaunch",
+        HookBoundaryKind::Stop,
+        None,
+    )
+    .unwrap();
+    assert!(response.handoff_ready);
+    assert!(
+        !response.relaunch_requested,
+        "legacy generated `claude --continue` must not be relaunched by the daemon"
     );
 }

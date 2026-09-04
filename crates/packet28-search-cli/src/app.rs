@@ -1277,7 +1277,7 @@ fn start_daemon(root: &Path) -> Result<()> {
         .append(true)
         .open(&log_path)
         .with_context(|| format!("failed to open daemon log '{}'", log_path.display()))?;
-    Command::new(binary)
+    let mut child = Command::new(binary)
         .arg("serve")
         .arg("--root")
         .arg(root_arg)
@@ -1286,6 +1286,16 @@ fn start_daemon(root: &Path) -> Result<()> {
         .stderr(Stdio::from(stderr))
         .spawn()
         .context("failed to spawn packet28d")?;
+    // Reap the daemon if it exits while p28 is still running (for example a
+    // bind failure because another daemon won the startup race) so it does
+    // not linger as a zombie for the lifetime of this process.
+    let pid = child.id();
+    thread::Builder::new()
+        .name(format!("packet28d-reaper-{pid}"))
+        .spawn(move || {
+            let _ = child.wait();
+        })
+        .context("failed to start packet28d child reaper")?;
     Ok(())
 }
 

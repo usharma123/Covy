@@ -636,52 +636,21 @@ fn write_windsurf_hook_config_installs_packet28_hooks() {
 }
 
 #[test]
-fn generated_relaunch_is_disabled_when_packet28_agent_is_missing() {
+fn legacy_generated_claude_continue_relaunch_is_migrated_to_host_managed() {
     let mut config = HookRuntimeConfig {
         relaunch_preference: RelaunchPreference::DaemonManaged,
-        relaunch_command: generated_relaunch_command(),
+        relaunch_command: vec!["claude".to_string(), "--continue".to_string()],
         ..HookRuntimeConfig::default()
     };
-    let changed = apply_generated_relaunch_command(&mut config, Path::new("/tmp/repo"), None);
+    let changed = apply_generated_relaunch_command(&mut config);
     assert!(changed);
     assert_eq!(config.relaunch_preference, RelaunchPreference::HostManaged);
     assert!(config.relaunch_command.is_empty());
+    assert!(!config.daemon_relaunch_enabled());
 }
 
 #[test]
-fn generated_relaunch_preserves_custom_commands() {
-    let original = vec!["custom-agent-runner".to_string(), "--resume".to_string()];
-    let mut config = HookRuntimeConfig {
-        relaunch_preference: RelaunchPreference::DaemonManaged,
-        relaunch_command: original.clone(),
-        ..HookRuntimeConfig::default()
-    };
-    let changed = apply_generated_relaunch_command(&mut config, Path::new("/tmp/repo"), None);
-    assert!(!changed);
-    assert_eq!(config.relaunch_command, original);
-}
-
-#[test]
-fn generated_relaunch_launches_delegated_runtime_directly() {
-    let mut config = HookRuntimeConfig::default();
-    let changed = apply_generated_relaunch_command(
-        &mut config,
-        Path::new("/tmp/repo"),
-        Some("/usr/local/bin/packet28-agent".to_string()),
-    );
-    assert!(changed);
-    assert_eq!(
-        config.relaunch_preference,
-        RelaunchPreference::DaemonManaged
-    );
-    assert_eq!(
-        config.relaunch_command,
-        vec!["claude".to_string(), "--continue".to_string()]
-    );
-}
-
-#[test]
-fn legacy_packet28_agent_relaunch_is_migrated_to_direct_runtime() {
+fn legacy_packet28_agent_relaunch_is_migrated_to_host_managed() {
     let mut config = HookRuntimeConfig {
         relaunch_preference: RelaunchPreference::DaemonManaged,
         relaunch_command: vec![
@@ -695,15 +664,38 @@ fn legacy_packet28_agent_relaunch_is_migrated_to_direct_runtime() {
         ],
         ..HookRuntimeConfig::default()
     };
-
-    let changed = apply_generated_relaunch_command(
-        &mut config,
-        Path::new("/tmp/repo"),
-        Some("/usr/local/bin/packet28-agent".to_string()),
-    );
-
+    let changed = apply_generated_relaunch_command(&mut config);
     assert!(changed);
-    assert_eq!(config.relaunch_command, generated_relaunch_command());
+    assert_eq!(config.relaunch_preference, RelaunchPreference::HostManaged);
+    assert!(config.relaunch_command.is_empty());
+}
+
+#[test]
+fn generated_relaunch_preserves_custom_commands() {
+    let original = vec!["custom-agent-runner".to_string(), "--resume".to_string()];
+    let mut config = HookRuntimeConfig {
+        relaunch_preference: RelaunchPreference::DaemonManaged,
+        relaunch_command: original.clone(),
+        ..HookRuntimeConfig::default()
+    };
+    let changed = apply_generated_relaunch_command(&mut config);
+    assert!(!changed);
+    assert_eq!(config.relaunch_command, original);
+    assert_eq!(
+        config.relaunch_preference,
+        RelaunchPreference::DaemonManaged
+    );
+    assert!(config.daemon_relaunch_enabled());
+}
+
+#[test]
+fn setup_never_enables_daemon_managed_relaunch_by_default() {
+    let mut config = HookRuntimeConfig::default();
+    let changed = apply_generated_relaunch_command(&mut config);
+    assert!(!changed);
+    assert_eq!(config.relaunch_preference, RelaunchPreference::HostManaged);
+    assert!(config.relaunch_command.is_empty());
+    assert!(!config.daemon_relaunch_enabled());
 }
 
 fn setup_index_status(
@@ -747,6 +739,25 @@ fn classify_setup_index_status_reports_building_while_index_is_in_progress() {
     assert!(matches!(
         classify_setup_index_status(dir.path(), &response, false),
         SetupIndexVerification::Building(_)
+    ));
+}
+
+#[test]
+fn setup_defers_dirty_git_index_without_masking_corruption() {
+    let dir = tempdir().unwrap();
+    let mut response = setup_index_status("queued", Some("building"), false);
+    response.manifest.last_error = Some(
+        "index publication failed: full regex index rebuild requires a clean Git working tree"
+            .to_string(),
+    );
+    assert!(matches!(
+        classify_setup_index_status(dir.path(), &response, true),
+        SetupIndexVerification::Deferred
+    ));
+    response.manifest.regex_status = Some("corrupt".to_string());
+    assert!(matches!(
+        classify_setup_index_status(dir.path(), &response, false),
+        SetupIndexVerification::Failed { .. }
     ));
 }
 
