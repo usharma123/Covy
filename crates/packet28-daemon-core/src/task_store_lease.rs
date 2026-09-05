@@ -1,16 +1,19 @@
 //! Cross-process ownership for daemon task storage.
 //!
-//! This module provides two independent lock primitives:
+//! This module provides three independent lock primitives:
 //!
 //! - task-store writers and daemons share the lifecycle lock while destructive
 //!   maintenance owns it exclusively;
 //! - one daemon owns the instance lock exclusively for its entire lifetime,
 //!   while retention holds it shared to prevent startup during maintenance.
+//! - clients serialize daemon discovery and bootstrap with the startup lock so
+//!   concurrent agents do not launch redundant daemon processes.
 //!
 //! The instance lock prevents two daemons from loading and publishing
 //! independent mutable state and closes the lifecycle exclusive-to-shared
-//! startup handoff window. It does not replace the lifecycle lock because
-//! non-daemon writers also need to exclude retention.
+//! startup handoff window. The startup lock prevents launch storms but grants
+//! no daemon authority. Neither replaces the lifecycle lock because non-daemon
+//! writers also need to exclude retention.
 
 #[cfg(test)]
 use std::fs;
@@ -32,6 +35,7 @@ use crate::{DaemonCoreError, Result};
 
 const TASK_STORE_LIFECYCLE_LOCK_FILE_NAME: &str = ".task-store-lifecycle.lock";
 const DAEMON_INSTANCE_LOCK_FILE_NAME: &str = ".daemon-instance.lock";
+const DAEMON_STARTUP_LOCK_FILE_NAME: &str = ".daemon-startup.lock";
 const REGISTRY_AUTHORITY_LOCK_FILE_NAME: &str = ".registry-authority.lock";
 
 #[cfg(test)]
@@ -93,6 +97,7 @@ pub(crate) enum LeaseRole {
     Writer,
     DaemonLifecycle,
     DaemonInstance,
+    DaemonStartup,
     Recovery,
     Retention,
     RetentionInstanceGate,
@@ -231,6 +236,11 @@ pub fn daemon_instance_lock_path(root: &Path) -> PathBuf {
     daemon_dir(root).join(DAEMON_INSTANCE_LOCK_FILE_NAME)
 }
 
+/// Returns the persistent lock path used to serialize daemon bootstrap.
+pub fn daemon_startup_lock_path(root: &Path) -> PathBuf {
+    daemon_dir(root).join(DAEMON_STARTUP_LOCK_FILE_NAME)
+}
+
 /// Acquires a shared task-store writer lease.
 ///
 /// Every production mutation of task registry, active-task state, task
@@ -325,6 +335,26 @@ pub fn acquire_daemon_instance_lease(root: &Path) -> Result<TaskStoreLease> {
             source,
         )),
     }
+}
+
+/// Serializes daemon discovery, stale-file cleanup, and process bootstrap.
+///
+/// The daemon instance lease prevents two daemons from becoming live, while
+/// this separate lease prevents concurrent clients from spawning a losing
+/// daemon process for the same workspace. Retain it until the selected daemon
+/// has published readiness or startup has failed.
+///
+/// # Errors
+///
+/// Returns [`DaemonCoreError::Io`] if the lock path cannot be safely created,
+/// opened, validated, or locked.
+pub fn acquire_daemon_startup_lease(root: &Path) -> Result<TaskStoreLease> {
+    let path = daemon_startup_lock_path(root);
+    let opened = open_persistent_daemon_lock(root, &path)?;
+    FileExt::lock_exclusive(&opened.file).map_err(|source| {
+        DaemonCoreError::io("failed to acquire daemon startup lease", &path, source)
+    })?;
+    validated_lease(root, opened, LeaseRole::DaemonStartup)
 }
 
 /// Acquires exclusive task-store ownership for daemon-startup recovery.
@@ -948,6 +978,34 @@ mod tests {
 
         drop(first);
         assert!(acquire_daemon_instance_lease(root.path()).is_ok());
+    }
+
+    #[test]
+    fn daemon_startup_lease_serializes_concurrent_clients() {
+        let root = tempdir().unwrap();
+        let first = acquire_daemon_startup_lease(root.path()).unwrap();
+        let root_path = root.path().to_path_buf();
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+        let second = thread::spawn(move || {
+            let lease = acquire_daemon_startup_lease(&root_path).unwrap();
+            acquired_tx.send(()).unwrap();
+            lease
+        });
+
+        assert!(matches!(
+            acquired_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(first);
+        acquired_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        drop(second.join().unwrap());
+    }
+
+    #[test]
+    fn daemon_startup_and_instance_leases_are_independent() {
+        let root = tempdir().unwrap();
+        let _startup = acquire_daemon_startup_lease(root.path()).unwrap();
+        let _instance = acquire_daemon_instance_lease(root.path()).unwrap();
     }
 
     #[cfg(unix)]
