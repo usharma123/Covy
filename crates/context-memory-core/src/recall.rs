@@ -169,11 +169,6 @@ impl PacketCache {
             .iter()
             .map(|item| item.to_ascii_lowercase())
             .collect::<Vec<_>>();
-        let path_filters = options
-            .path_filters
-            .iter()
-            .map(|item| item.to_ascii_lowercase())
-            .collect::<Vec<_>>();
         let symbol_filters = options
             .symbol_filters
             .iter()
@@ -189,6 +184,8 @@ impl PacketCache {
         let mut basename_path_matches = HashMap::<String, BTreeSet<String>>::new();
         let mut symbol_index_matches = HashMap::<String, BTreeSet<String>>::new();
         let mut graph_overlap_candidates = BTreeSet::<String>::new();
+        let mut explicit_path_candidates = HashSet::new();
+        let mut explicit_symbol_candidates = HashSet::new();
         if query_tokens.is_empty() {
             for cache_key in self.recall_docs.keys() {
                 candidate_scores.insert(cache_key.clone(), 0.0);
@@ -212,17 +209,28 @@ impl PacketCache {
             }
         }
 
-        for needle in options.path_filters.iter().chain(query_path_terms.iter()) {
+        for (index, needle) in options
+            .path_filters
+            .iter()
+            .chain(query_path_terms.iter())
+            .enumerate()
+        {
+            let mut add_candidate = |cache_key: &String| {
+                candidate_scores.entry(cache_key.clone()).or_insert(0.0);
+                graph_overlap_candidates.insert(cache_key.clone());
+                if index < options.path_filters.len() {
+                    explicit_path_candidates.insert(cache_key.clone());
+                }
+            };
             let normalized_needle = needle.to_ascii_lowercase();
             if let Some(path_ref) = normalize_context_path(needle, self.workspace_root.as_deref()) {
                 if let Some(cache_keys) = self.file_ref_index.get(&path_ref.canonical) {
                     for cache_key in cache_keys {
-                        candidate_scores.entry(cache_key.clone()).or_insert(0.0);
+                        add_candidate(cache_key);
                         canonical_path_matches
                             .entry(cache_key.clone())
                             .or_default()
                             .insert(path_ref.canonical.clone());
-                        graph_overlap_candidates.insert(cache_key.clone());
                     }
                 } else if let Some(basename) = path_ref.basename.as_ref() {
                     if let Some(canonicals) = self.basename_alias_index.get(basename) {
@@ -230,12 +238,11 @@ impl PacketCache {
                             for canonical in canonicals {
                                 if let Some(cache_keys) = self.file_ref_index.get(canonical) {
                                     for cache_key in cache_keys {
-                                        candidate_scores.entry(cache_key.clone()).or_insert(0.0);
+                                        add_candidate(cache_key);
                                         basename_path_matches
                                             .entry(cache_key.clone())
                                             .or_default()
                                             .insert(canonical.clone());
-                                        graph_overlap_candidates.insert(cache_key.clone());
                                     }
                                 }
                             }
@@ -248,12 +255,11 @@ impl PacketCache {
                     || canonical.starts_with(&normalized_needle)
                 {
                     for cache_key in cache_keys {
-                        candidate_scores.entry(cache_key.clone()).or_insert(0.0);
+                        add_candidate(cache_key);
                         canonical_path_matches
                             .entry(cache_key.clone())
                             .or_default()
                             .insert(canonical.clone());
-                        graph_overlap_candidates.insert(cache_key.clone());
                     }
                 }
             }
@@ -265,12 +271,11 @@ impl PacketCache {
                     for canonical in canonicals {
                         if let Some(cache_keys) = self.file_ref_index.get(canonical) {
                             for cache_key in cache_keys {
-                                candidate_scores.entry(cache_key.clone()).or_insert(0.0);
+                                add_candidate(cache_key);
                                 basename_path_matches
                                     .entry(cache_key.clone())
                                     .or_default()
                                     .insert(canonical.clone());
-                                graph_overlap_candidates.insert(cache_key.clone());
                             }
                         }
                     }
@@ -278,15 +283,13 @@ impl PacketCache {
             }
         }
 
-        for needle in options
-            .symbol_filters
-            .iter()
-            .map(|item| item.to_ascii_lowercase())
-            .chain(query_tokens.iter().cloned())
-        {
+        for (index, needle) in symbol_filters.iter().chain(query_tokens.iter()).enumerate() {
             for (symbol, cache_keys) in &self.symbol_index {
-                if symbol == &needle || symbol.starts_with(&needle) || symbol.contains(&needle) {
+                if symbol == needle || symbol.starts_with(needle) || symbol.contains(needle) {
                     for cache_key in cache_keys {
+                        if index < symbol_filters.len() {
+                            explicit_symbol_candidates.insert(cache_key.clone());
+                        }
                         candidate_scores.entry(cache_key.clone()).or_insert(0.0);
                         symbol_index_matches
                             .entry(cache_key.clone())
@@ -337,6 +340,11 @@ impl PacketCache {
                 },
             );
         for (cache_key, base_score) in candidate_scores {
+            if (!options.path_filters.is_empty() && !explicit_path_candidates.contains(&cache_key))
+                || (!symbol_filters.is_empty() && !explicit_symbol_candidates.contains(&cache_key))
+            {
+                continue;
+            }
             let Some(doc) = self.recall_docs.get(&cache_key) else {
                 continue;
             };
@@ -441,12 +449,6 @@ impl PacketCache {
             }
             if !matched_symbols.is_empty() {
                 score += 1.5;
-            }
-            if !path_filters.is_empty() && matched_paths.is_empty() {
-                continue;
-            }
-            if !symbol_filters.is_empty() && matched_symbols.is_empty() {
-                continue;
             }
             if task_scoped_match {
                 score += match options.scope {
@@ -673,6 +675,93 @@ pub(crate) fn collect_matches(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_matches_cannot_bypass_explicit_path_or_symbol_filters() {
+        let mut cache = PacketCache::new();
+        let mut keys = Vec::new();
+        for (path, symbol) in [
+            ("src/auth.rs", "authenticate"),
+            ("src/billing.rs", "invoice"),
+        ] {
+            let lookup = cache.lookup_with_hooks(
+                "demo.reducer",
+                &serde_json::json!(path),
+                &mut NoopDeltaReuseHooks,
+            );
+            let entry = cache.put_with_hooks(
+                "demo.reducer",
+                &lookup,
+                vec![CachePacket {
+                    body: serde_json::json!({"files": [{"path": path}], "symbols": [{"name": symbol}]}),
+                    ..CachePacket::default()
+                }],
+                Value::Null,
+                &mut NoopDeltaReuseHooks,
+            );
+            keys.push(entry.cache_key);
+        }
+        let cases = [
+            ("path", vec!["src/auth.rs"], vec![], vec![keys[0].clone()]),
+            (
+                "symbol",
+                vec![],
+                vec!["authenticate"],
+                vec![keys[0].clone()],
+            ),
+            (
+                "both",
+                vec!["src/auth.rs"],
+                vec!["authenticate"],
+                vec![keys[0].clone()],
+            ),
+            ("disjoint", vec!["src/auth.rs"], vec!["invoice"], vec![]),
+            ("missing path", vec!["src/missing.rs"], vec![], vec![]),
+            ("missing symbol", vec![], vec!["nonexistent"], vec![]),
+            (
+                "basename fallback",
+                vec!["old/auth.rs"],
+                vec![],
+                vec![keys[0].clone()],
+            ),
+            (
+                "substring and case",
+                vec!["AUTH"],
+                vec!["AUTHENT"],
+                vec![keys[0].clone()],
+            ),
+            (
+                "alternatives",
+                vec!["missing", "auth"],
+                vec!["nonexistent", "authenticate"],
+                vec![keys[0].clone()],
+            ),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        cache.save_to_disk(&config).unwrap();
+        let restored = PacketCache::load_from_disk(&config);
+        for (state, cache) in [("live", &cache), ("restored", &restored)] {
+            for (case, paths, symbols, expected) in &cases {
+                let actual = cache
+                    .recall(
+                        "src/billing.rs invoice",
+                        &RecallOptions {
+                            path_filters: paths.iter().map(|item| (*item).to_string()).collect(),
+                            symbol_filters: symbols
+                                .iter()
+                                .map(|item| (*item).to_string())
+                                .collect(),
+                            ..RecallOptions::default()
+                        },
+                    )
+                    .into_iter()
+                    .map(|hit| hit.cache_key)
+                    .collect::<Vec<_>>();
+                assert_eq!(&actual, expected, "{state}: {case}");
+            }
+        }
+    }
 
     #[test]
     fn unknown_task_filter_does_not_fall_back_to_global_related_entries() {

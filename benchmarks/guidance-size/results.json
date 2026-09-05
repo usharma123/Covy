@@ -1,0 +1,34 @@
+{
+  "base_revision": "b77b4b511667b89075ec4ac89590a2ec2757f8a7",
+  "renderer_sha256": "cff8fb2ff945753ce5f856cbd908b1b97a156cf5249ec85aa117b577ee5c7a27",
+  "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+  "command": "python3 benchmarks/guidance-size/measure.py --base b77b4b511667b89075ec4ac89590a2ec2757f8a7",
+  "scope": "UTF-8 bytes, no provider token, latency, cache-hit, or adherence claim",
+  "formats": {
+    "Claude": {
+      "before_bytes": 2017,
+      "after_bytes": 1453,
+      "removed_bytes": 564
+    },
+    "Agents": {
+      "before_bytes": 1828,
+      "after_bytes": 1463,
+      "removed_bytes": 365
+    },
+    "Cursor": {
+      "before_bytes": 1887,
+      "after_bytes": 1493,
+      "removed_bytes": 394
+    },
+    "CursorRule": {
+      "before_bytes": 1829,
+      "after_bytes": 1567,
+      "removed_bytes": 262
+    },
+    "WindsurfRule": {
+      "before_bytes": 1887,
+      "after_bytes": 1552,
+      "removed_bytes": 335
+    }
+  }
+}
