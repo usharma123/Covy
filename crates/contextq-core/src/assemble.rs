@@ -171,8 +171,16 @@ pub fn assemble_packets(
             .refs
             .retain(|r| !seen_ref_keys.contains(&ref_key(r)));
 
+        // Compact output stores references globally, so charge them only in
+        // the reference admission pass. Keep them here until collection below.
+        let compact_refs = options
+            .compact_assembly
+            .then(|| std::mem::take(&mut section.refs));
         let section_tokens = estimate_section_tokens(&section);
         let section_bytes = estimate_json_bytes(&section);
+        if let Some(refs) = compact_refs {
+            section.refs = refs;
+        }
 
         if exceeds_budget(used_tokens, section_tokens, options.budget_tokens)
             || exceeds_budget_usize(used_bytes, section_bytes, options.budget_bytes)

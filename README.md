@@ -221,7 +221,7 @@ types, persistence, FFI, or release automation.
 ## Project stats
 
 <!-- BEGIN GENERATED PROJECT STATS -->
-- 273,920 lines across 683 Rust files
+- 273,969 lines across 683 Rust files
 - 34 crates in the workspace
 - 8 Cargo binary targets (including one internal generator)
 <!-- END GENERATED PROJECT STATS -->

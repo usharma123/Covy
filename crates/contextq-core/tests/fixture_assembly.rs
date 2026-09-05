@@ -115,3 +115,44 @@ fn rejected_sections_do_not_consume_reference_deduplication_state() {
         }
     }
 }
+
+#[test]
+fn compact_sections_do_not_double_charge_global_references() {
+    use contextq_core::{
+        AssembleOptions, AssembledPayload, ContextRef, ContextSection, InputPacket,
+    };
+
+    let reference = ContextRef {
+        kind: "file".to_string(),
+        value: format!("src/{}.rs", "a".repeat(600)),
+        ..ContextRef::default()
+    };
+    for (budget_tokens, budget_bytes) in [(260, usize::MAX), (u64::MAX, 1_000)] {
+        let assembled = contextq_core::assemble_packets(
+            vec![InputPacket {
+                packet_id: Some("source".to_string()),
+                sections: vec![ContextSection {
+                    title: "Evidence".to_string(),
+                    body: "failure".to_string(),
+                    refs: vec![reference.clone()],
+                    ..ContextSection::default()
+                }],
+                ..InputPacket::default()
+            }],
+            AssembleOptions {
+                budget_tokens,
+                budget_bytes,
+                compact_assembly: true,
+                ..AssembleOptions::default()
+            },
+        );
+        let payload: AssembledPayload = serde_json::from_value(assembled.payload).unwrap();
+        assert_eq!(payload.sections.len(), 1);
+        assert!(payload.sections[0].refs.is_empty());
+        assert_eq!(payload.refs.len(), 1);
+        assert_eq!(payload.refs[0].value, reference.value);
+        assert_eq!(assembled.assembly.refs_dropped, 0);
+        assert!(assembled.assembly.estimated_bytes <= budget_bytes);
+        assert!(assembled.assembly.estimated_tokens <= budget_tokens);
+    }
+}
