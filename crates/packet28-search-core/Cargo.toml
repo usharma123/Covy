@@ -33,7 +33,7 @@ packet28-reducer-core.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
-syn = { version = "2.0.116", features = ["full", "visit"] }
+syn = { version = "3.0.3", features = ["full", "visit"] }
 tempfile.workspace = true
 
 [[bench]]
