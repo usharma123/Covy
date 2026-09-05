@@ -65,7 +65,7 @@ pub fn render_prompt_fragment(format: AgentPromptFormat, root: Option<&str>) -> 
             } else {
                 "Packet28 integration:\n"
             },
-            "Cursor tool names use `packet28_*`; dotted aliases work where supported.\n",
+            "Cursor uses `packet28_*` tool names. Dotted aliases such as `packet28.write_intention` and `packet28.read_regions` work where supported.\n",
             "packet28_",
         ),
         AgentPromptFormat::WindsurfRule => (
@@ -142,6 +142,8 @@ mod tests {
     #[test]
     fn cursor_fragment_mentions_non_trivial_scope() {
         let rendered = render_prompt_fragment(AgentPromptFormat::Cursor, None);
+        assert!(rendered.contains("packet28.write_intention"));
+        assert!(rendered.contains("packet28.read_regions"));
         assert!(rendered.contains("packet28_prepare_handoff"));
         assert!(rendered.contains("packet28_fetch_context"));
         assert!(rendered.contains("packet28_glob"));

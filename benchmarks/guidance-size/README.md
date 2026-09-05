@@ -7,7 +7,7 @@ launch Packet28 or configure hooks.
 
 `results.json` records the baseline revision, current renderer hash, compiler,
 and exact UTF-8 byte lengths for all five formats with the default root. The
-shared workflow removes 326–564 bytes per fragment while retaining runtime
+shared workflow removes 262 to 564 bytes per fragment while retaining runtime
 capabilities and command names. Updated guidance distinguishes brief
 supersession from editing earlier messages in a cached conversation.
 

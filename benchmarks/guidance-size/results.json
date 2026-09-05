@@ -1,6 +1,6 @@
 {
   "base_revision": "b77b4b511667b89075ec4ac89590a2ec2757f8a7",
-  "renderer_sha256": "560cc590c56992a7e26e5296d069737e3e710fe1948a098490cfde4688c10733",
+  "renderer_sha256": "7231457ef35b7a00fd0ec9f59318fe24413248b97a1021896abacab702b2ab0a",
   "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
   "command": "python3 benchmarks/guidance-size/measure.py --base b77b4b511667b89075ec4ac89590a2ec2757f8a7",
   "scope": "UTF-8 bytes, no provider token, latency, cache-hit, or adherence claim",
@@ -17,13 +17,13 @@
     },
     "Cursor": {
       "before_bytes": 1887,
-      "after_bytes": 1429,
-      "removed_bytes": 458
+      "after_bytes": 1493,
+      "removed_bytes": 394
     },
     "CursorRule": {
       "before_bytes": 1829,
-      "after_bytes": 1503,
-      "removed_bytes": 326
+      "after_bytes": 1567,
+      "removed_bytes": 262
     },
     "WindsurfRule": {
       "before_bytes": 1887,
