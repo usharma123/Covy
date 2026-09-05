@@ -70,7 +70,7 @@ pub fn render_prompt_fragment(format: AgentPromptFormat, root: Option<&str>) -> 
         ),
         AgentPromptFormat::WindsurfRule => (
             "---\ndescription: Packet28 runtime guidance\ntrigger: always_on\n---\n\n# Packet28 Integration\n",
-            "Use MCP tools and rules in Windsurf; command rewriting requires confirmation from `Packet28 doctor --agent windsurf`.\n",
+            "Windsurf command rewrite is not guaranteed; use MCP tools and rules unless `Packet28 doctor --agent windsurf` confirms support.\n",
             "packet28.",
         ),
     };
@@ -213,6 +213,7 @@ mod tests {
             assert!(!render_prompt_fragment(format, None).contains("`Packet28 setup`"));
         }
         let windsurf = render_prompt_fragment(AgentPromptFormat::WindsurfRule, None);
-        assert!(windsurf.contains("command rewriting requires confirmation"));
+        assert!(windsurf.contains("Windsurf command rewrite is not guaranteed"));
+        assert!(windsurf.contains("Packet28 doctor --agent windsurf"));
     }
 }
