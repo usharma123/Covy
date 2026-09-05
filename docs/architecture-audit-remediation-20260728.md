@@ -12,8 +12,8 @@ implementation, evidence, and integration status.
 - **Audit artifact size:** 741 lines, 64,714 bytes
 - **Audit date:** 28 July 2026
 - **Final current-source snapshot used by this revision:** commit
-  `d05f11c88f89180a028eab04d72b39bf4cfb85b1`, tree
-  `e34380a70cba8f14b0dff31bf05a37aaacd459b2`
+  `4d8fd8c71c27b0c6991e7483e8ee48b0d75b55dd`, tree
+  `4648573787b93316c883e99f03e1f130f4773b7c`
 - **Snapshot policy:** current-source statements below describe that clean
   committed tree only. The ledger synchronization is a ledger-only child
   commit, so the strict validator can mechanically re-resolve this source
@@ -419,15 +419,15 @@ to be complete and exact.
 <!-- BEGIN GENERATED: LEDGER-SNAPSHOT -->
 | Field | Value |
 |---|---|
-| Final source snapshot commit | `d05f11c88f89180a028eab04d72b39bf4cfb85b1` |
-| Final source snapshot tree | `e34380a70cba8f14b0dff31bf05a37aaacd459b2` |
+| Final source snapshot commit | `4d8fd8c71c27b0c6991e7483e8ee48b0d75b55dd` |
+| Final source snapshot tree | `4648573787b93316c883e99f03e1f130f4773b7c` |
 | Audit source SHA-256 | `126de8fc65b42bf5000ad1744293a1507e4abf18c1cbabc57dbb9e1a217195a9` |
-| Integration commit | `d05f11c88f89180a028eab04d72b39bf4cfb85b1` |
-| Integration tree | `e34380a70cba8f14b0dff31bf05a37aaacd459b2` |
+| Integration commit | `4d8fd8c71c27b0c6991e7483e8ee48b0d75b55dd` |
+| Integration tree | `4648573787b93316c883e99f03e1f130f4773b7c` |
 | Later integration work | None in source: the ledger synchronization is the required ledger-only child commit. |
-| Dirty-tree fingerprint | Clean source snapshot; SHA-256 of empty `git status --porcelain=v1` output is `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`. |
-| Toolchain / host / date | Rust 1.93.1 stable and exact MSRV 1.88.0; `aarch64-apple-darwin`; Darwin 24.6.0 arm64; 2026-07-30 EDT. |
-| Commits since original ledger `d12943d` at final source snapshot | `326` |
+| Dirty-tree fingerprint | Tracked source matches the committed snapshot. Validation ran in an isolated worktree; a local target/debug compatibility link supplied the legacy test harness path. Generated caches are not source changes. |
+| Toolchain / host / date | Rust 1.93.1 and exact MSRV 1.88.0; `aarch64-apple-darwin`; Darwin 24.6.0 arm64; 2026-09-04 EDT. |
+| Commits since original ledger `d12943d` at final source snapshot | `392` |
 <!-- END GENERATED: LEDGER-SNAPSHOT -->
 
 ### Follow-up commit placeholders
@@ -442,7 +442,10 @@ to be complete and exact.
 | SQLite memory dependent lifecycle | `7fa3cc2c` | Schema v3 removes historical orphans and owns chunk/embedding deletion plus embedding-input invalidation; unit, migration, forget, maintenance, and consolidation E2Es pass. | Final blind-review correctness/architecture finding closed. |
 | Query embedding cache | `a70201ec`, `624f5436` | Production recall reuses one deterministic query vector per dimension; the regression invokes the exact production helper; focused test, strict Clippy, and full suite pass. | Final blind-review performance finding and test-quality follow-up closed. |
 | Final blind-review verification | `d05f11c8` | Two independent read-only reviewers verified the final source snapshot and reported no remaining actionable findings. | Authorizes final integration after the canonical and MSRV gates. |
-| Ledger integration | ledger-only child of `d05f11c8` | `python3 scripts/check_architecture_audit_ledger.py --final --source-rev HEAD^` plus the canonical gate's ledger policy/mutation suite. | Documentation trace only; source remains anchored to its parent. |
+| Portable Claude hooks and scoped MCP roots | `1582502a`, `d83d6d3f`, `a58d5e23`, release source `d80e42bd` | PR #34 passed the canonical CI matrix; the v0.2.64 source snapshot passed the local current-toolchain gate, exact MSRV gate, npm package verification, cargo-deny policy, and packaged-source compilation. | Records the release hardening follow-up without rewriting historical audit observations. |
+| Daemon process hotfix and trusted publishing | `92ec8222` | Lifecycle concurrency and uninstall regressions passed; hook benchmarks passed with 95.9% mean reduction; native eligible reduction 85.4%; all eight experiment workflows verified. | Records v0.2.65 without rewriting historical audit rows. |
+| Linux preload release repair | `4d8fd8c7` | GNU shared-library targets are separate from static musl executables; two release-policy regressions and the synchronized child-exit test pass. v0.2.65 did not publish because the prior recipe tried to produce a cdylib for the static musl target. Fresh hook reduction 95.2%, native eligible reduction 85.4%, and all eight experiment workflows pass. | Records v0.2.66 and the failed v0.2.65 publication boundary without rewriting historical rows. |
+| Ledger integration | ledger-only child of `4d8fd8c7` | `python3 scripts/check_architecture_audit_ledger.py --final --source-rev HEAD^` plus the canonical gate's ledger policy/mutation suite. | Documentation trace only; source remains anchored to its parent. |
 <!-- END GENERATED: FOLLOW-UP-COMMITS -->
 
 ### Canonical final gate
@@ -453,23 +456,23 @@ captured output. Focused evidence in the rows above is not a substitute.
 <!-- BEGIN GENERATED: FINAL-GATE -->
 | Gate | Exact command | Result | Artifact / timestamp |
 |---|---|---|---|
-| Ledger/source-anchor validation | `python3 scripts/check_architecture_audit_ledger.py --final --source-rev HEAD^` | **PASS** | Final ledger-only commit resolves source `d05f11c8` / tree `e34380a7`; 176 source rows, 34 aliases, 10 relationships; 2026-07-30 EDT. |
-| README generated statistics | `python3 scripts/verify_readme_stats.py --check` | **PASS** | 34 crates, 681 Rust files, 271,829 Rust lines, eight Cargo binary targets at `d05f11c8`; 2026-07-30 EDT. |
-| Formatting | `cargo fmt --all -- --check` | **PASS** | Canonical gate at `d05f11c8`; 2026-07-30 EDT. |
-| Workspace check | `cargo check --workspace --all-targets --all-features --locked` | **PASS** | Locked current-toolchain check at `d05f11c8`; 2026-07-30 EDT. |
-| Workspace build | `cargo build --workspace --all-targets --all-features --locked` | **PASS** | Locked all-target/all-feature build at `d05f11c8`; 2026-07-30 EDT. |
-| Strict Clippy | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | **PASS** | Zero denied warnings at `d05f11c8`; 2026-07-30 EDT. |
-| Full all-feature tests | `cargo test --workspace --all-targets --all-features --locked` | **PASS** | Full workspace unit, integration, E2E, architecture, concurrency, lifecycle, corruption, and benchmark-target suite passed at `d05f11c8`; 2026-07-30 EDT. |
-| Doctests | `cargo test --workspace --doc --all-features --locked` | **PASS** | Runnable and compile-fail doctests passed at `d05f11c8`; 2026-07-30 EDT. |
-| Strict rustdoc | `RUSTDOCFLAGS="-D warnings -D rustdoc::broken_intra_doc_links" cargo doc --workspace --all-features --no-deps --locked` | **PASS** | Strict workspace documentation generated without warnings at `d05f11c8`; 2026-07-30 EDT. |
-| Architecture rules | `python3 scripts/check_architecture.py` | **PASS** | Dependency rules plus 36 mutation tests and four search-module architecture tests passed in the canonical gate; 2026-07-30 EDT. |
-| Supply-chain policy | `cargo deny --locked check` | **PASS** | Checksum-pinned cargo-deny 0.20.2: advisories, bans, licenses, and sources all passed; reviewed duplicate warnings only; 2026-07-30 EDT. |
-| Exact MSRV | `rustup run 1.88.0 scripts/validate_full_gate.sh --msrv` | **PASS** | Exact rustc 1.88.0 locked all-target/all-feature check and all policy gates passed at `d05f11c8`; 2026-07-30 EDT. |
-| Packaging/release dry-run | `python3 scripts/verify_release_packages.py source` | **PASS** | Offline npm pack/publish dry-runs passed for root plus four platform packages at version 0.2.63; 2026-07-30 EDT. |
-| Cargo publication policy | `python3 scripts/package_cargo_workspace.py` | **PASS** | All 34 crates packaged and the disposable packaged-source workspace compiled successfully; 2026-07-30 EDT. |
-| Performance/cache experiments | `python3 benchmarks/per-03-incremental-index/verify.py` | **PASS** | Mapy byte gate passed while its latency claim remains explicitly rejected/experiment-gated; regex byte/time gates passed; 2026-07-30 EDT. |
-| Runtime-starvation evidence | `python3 benchmarks/asy-04-runtime-starvation/verify.py` | **PASS** | Versioned ASY-04 runtime-starvation evidence verified at `d05f11c8`; 2026-07-30 EDT. |
-| Current-source index benchmark | `cargo test --offline --locked -p packet28d index::tests::daemon_incremental_publication_benchmark -- --nocapture` | **PASS** | Median 294,936 µs; 27,966 incremental publication bytes vs 1,410,899 initial-generation bytes; legacy snapshot not written; 2026-07-30 EDT. |
+| Ledger/source-anchor validation | `python3 scripts/check_architecture_audit_ledger.py --final --source-rev HEAD^` | **PASS** | Finalization resolves source `4d8fd8c7` / tree `46485737` and all closing commits. Source `4d8fd8c7`; 2026-09-04 EDT. |
+| README generated statistics | `python3 scripts/verify_readme_stats.py --check` | **PASS** | 34 crates, 683 Rust files, 273,781 Rust lines; `/tmp/p28-v66-full-gate.log`. Source `4d8fd8c7`; 2026-09-04 EDT. |
+| Formatting | `cargo fmt --all -- --check` | **PASS** | Workspace formatting passed; `/tmp/p28-v66-full-gate.log`. Source `4d8fd8c7`; 2026-09-04 EDT. |
+| Workspace check | `cargo check --workspace --all-targets --all-features --locked` | **PASS** | Locked all-target/all-feature check passed; `/tmp/p28-v66-full-gate.log`. Source `4d8fd8c7`; 2026-09-04 EDT. |
+| Workspace build | `cargo build --workspace --all-targets --all-features --locked` | **PASS** | Locked all-target/all-feature build passed; `/tmp/p28-v66-full-gate.log`. Source `4d8fd8c7`; 2026-09-04 EDT. |
+| Strict Clippy | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | **PASS** | Strict workspace Clippy passed without denied warnings; `/tmp/p28-v66-full-gate.log`. Source `4d8fd8c7`; 2026-09-04 EDT. |
+| Full all-feature tests | `cargo test --workspace --all-targets --all-features --locked` | **PASS** | Full workspace suite passed, including the synchronized child-exit test and six daemon lifecycle tests; `/tmp/p28-v66-final-gates.log`. The first local run could not locate target/debug binaries under the isolated target directory; the expected path was supplied before the successful full rerun. Source `4d8fd8c7`; 2026-09-04 EDT. |
+| Doctests | `cargo test --workspace --doc --all-features --locked` | **PASS** | All workspace doctests passed; `/tmp/p28-v66-final-gates.log`. Source `4d8fd8c7`; 2026-09-04 EDT. |
+| Strict rustdoc | `RUSTDOCFLAGS="-D warnings -D rustdoc::broken_intra_doc_links" cargo doc --workspace --all-features --no-deps --locked` | **PASS** | Strict workspace documentation passed; `/tmp/p28-v66-final-gates.log`. Source `4d8fd8c7`; 2026-09-04 EDT. |
+| Architecture rules | `python3 scripts/check_architecture.py` | **PASS** | Architecture and mutation suites passed, including both Linux library target guards; `/tmp/p28-v66-full-gate.log`. Source `4d8fd8c7`; 2026-09-04 EDT. |
+| Supply-chain policy | `cargo deny --locked check` | **PASS** | Checksum-verified cargo-deny 0.20.2 passed advisories, bans, licenses and sources; duplicate warnings reviewed; `/tmp/p28-v66-final-gates.log`. Source `4d8fd8c7`; 2026-09-04 EDT. |
+| Exact MSRV | `rustup run 1.88.0 scripts/validate_full_gate.sh --msrv` | **PASS** | Exact Rust 1.88.0 policy checks and locked all-target/all-feature workspace check passed; `/tmp/p28-v66-msrv-gate.log`. Source `4d8fd8c7`; 2026-09-04 EDT. |
+| Packaging/release dry-run | `python3 scripts/verify_release_packages.py source` | **PASS** | Offline npm pack/publish dry-runs passed for all five packages at 0.2.66; `/tmp/p28-v66-final-gates.log`. Source `4d8fd8c7`; 2026-09-04 EDT. |
+| Cargo publication policy | `python3 scripts/package_cargo_workspace.py` | **PASS** | All 34 crates packaged and the recovered packaged-source workspace compiled; `/tmp/p28-v66-final-gates.log`. Source `4d8fd8c7`; 2026-09-04 EDT. |
+| Performance/cache experiments | `python3 benchmarks/per-03-incremental-index/verify.py` | **PASS** | Versioned Mapy byte and regex byte/time evidence verified; Mapy latency remains experiment-gated; `/tmp/p28-v66-full-gate.log`. Source `4d8fd8c7`; 2026-09-04 EDT. |
+| Runtime-starvation evidence | `python3 benchmarks/asy-04-runtime-starvation/verify.py` | **PASS** | Versioned ASY-04 evidence verified; `/tmp/p28-v66-full-gate.log`. Source `4d8fd8c7`; 2026-09-04 EDT. |
+| Current-source index benchmark | `cargo test --offline --locked -p packet28d index::tests::daemon_incremental_publication_benchmark -- --nocapture` | **PASS** | Median 348,788 microseconds; 27,951 incremental bytes versus 1,410,884 initial-generation bytes; no legacy snapshot; `/tmp/p28-v66-index-benchmark.log`. Source `4d8fd8c7`; 2026-09-04 EDT. |
 <!-- END GENERATED: FINAL-GATE -->
 
 ### Generated row summary

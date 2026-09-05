@@ -5,7 +5,7 @@ use crate::{
     cmd_diff, cmd_digest, cmd_discover, cmd_doctor, cmd_feedback, cmd_graph, cmd_guard, cmd_hook,
     cmd_hypothesis, cmd_impact, cmd_init, cmd_learn, cmd_map, cmd_map_query, cmd_map_repo, cmd_mcp,
     cmd_memory, cmd_packet, cmd_plan, cmd_proxy, cmd_run, cmd_setup, cmd_shard, cmd_shell,
-    cmd_stack, cmd_system, cmd_transcript, cmd_verify, cmd_wakeup,
+    cmd_stack, cmd_system, cmd_transcript, cmd_uninstall, cmd_verify, cmd_wakeup,
 };
 
 #[derive(Parser)]
@@ -382,6 +382,8 @@ pub enum Commands {
     Doctor(cmd_doctor::DoctorArgs),
     /// Configure Packet28 for your agent runtimes (Claude Code, Cursor, Codex, Windsurf)
     Setup(cmd_setup::SetupArgs),
+    /// Remove Packet28 hooks and MCP entries from this workspace and stop its background processes
+    Uninstall(cmd_uninstall::UninstallArgs),
     /// Initialize Packet28 for a specific agent runtime
     Init(cmd_init::InitArgs),
     /// Launch an agent command through the Packet28 runtime backend

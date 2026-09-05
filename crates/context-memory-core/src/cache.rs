@@ -94,6 +94,9 @@ impl PacketCache {
 
     /// Evicts entries expired at one caller-supplied timestamp.
     pub fn evict_expired_entries_at(&mut self, ttl_secs: u64, now_unix: u64) -> Vec<String> {
+        if ttl_secs == 0 {
+            return Vec::new();
+        }
         self.remove_where(
             |entry, _| is_expired(entry.created_at_unix, ttl_secs, now_unix),
             EvictionReason::ExpiredTtl,
@@ -107,6 +110,9 @@ impl PacketCache {
 
     /// Returns entries expired at one caller-supplied timestamp.
     pub fn expired_entry_keys_at(&self, ttl_secs: u64, now_unix: u64) -> Vec<String> {
+        if ttl_secs == 0 {
+            return Vec::new();
+        }
         let mut keys = self
             .entries_by_hash
             .iter()
@@ -474,9 +480,9 @@ impl PacketCache {
             self.entries_by_hash.remove(cache_key);
             self.remove_index_for(cache_key);
         }
-        self.rebuild_latest_request_index();
         let removed = to_remove.len();
         if removed > 0 {
+            self.rebuild_latest_request_index();
             self.evict_reason(reason, removed);
         }
         to_remove
@@ -487,6 +493,8 @@ impl PacketCache {
     }
 
     pub(crate) fn rebuild_latest_request_index(&mut self) {
+        #[cfg(test)]
+        REQUEST_INDEX_REBUILDS.with(|calls| calls.set(calls.get().saturating_add(1)));
         let mut latest = HashMap::<String, (u64, String)>::new();
 
         for (cache_key, entry) in &self.entries_by_hash {
@@ -653,6 +661,7 @@ pub(crate) fn encode_json_value(value: &Value) -> String {
 #[cfg(test)]
 thread_local! {
     static PERSIST_JSON_ENCODE_CALLS: Cell<usize> = const { Cell::new(0) };
+    static REQUEST_INDEX_REBUILDS: Cell<usize> = const { Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -1055,6 +1064,61 @@ mod tests {
             assert_eq!(candidates, removed, "case {case}");
             assert_eq!(removed == vec![cache_key], expected_expired, "case {case}");
         }
+    }
+
+    #[test]
+    fn expiration_preserves_live_lookup_and_recall_without_rebuilding_on_noop() {
+        const NOW: u64 = 10_000;
+        let mut cache = PacketCache::new();
+        let mut hooks = NoopDeltaReuseHooks;
+        let mut entries = Vec::new();
+        for (id, age) in [("expired", 61), ("boundary", 60), ("fresh", 0)] {
+            let lookup =
+                cache.lookup_with_hooks("demo.reducer", &serde_json::json!(id), &mut hooks);
+            entries.push(cache.put_at_with_hooks(
+                "demo.reducer",
+                &lookup,
+                vec![CachePacket {
+                    body: serde_json::json!({"summary": format!("expiration fixture {id}")}),
+                    ..CachePacket::default()
+                }],
+                Value::Null,
+                NOW - age,
+                &mut hooks,
+            ));
+        }
+
+        let rebuilds = REQUEST_INDEX_REBUILDS.with(Cell::get);
+        assert!(cache.expired_entry_keys_at(0, NOW).is_empty());
+        assert!(cache.evict_expired_entries_at(0, NOW).is_empty());
+        assert_eq!(REQUEST_INDEX_REBUILDS.with(Cell::get), rebuilds);
+        assert_eq!(cache.len(), 3);
+
+        assert_eq!(
+            cache.evict_expired_entries_at(60, NOW),
+            vec![entries[0].cache_key.clone()]
+        );
+        assert!(cache
+            .get_by_request("demo.reducer", &entries[0].input_hash)
+            .is_none());
+        for entry in &entries[1..] {
+            assert_eq!(
+                cache
+                    .get_by_request("demo.reducer", &entry.input_hash)
+                    .unwrap()
+                    .cache_key,
+                entry.cache_key
+            );
+        }
+        let hits = cache.recall("expiration fixture", &RecallOptions::default());
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().all(|hit| hit.cache_key != entries[0].cache_key));
+        assert_eq!(cache.stats().evictions.expired_ttl, 1);
+
+        let rebuilds = REQUEST_INDEX_REBUILDS.with(Cell::get);
+        assert!(cache.evict_expired_entries_at(60, NOW).is_empty());
+        assert_eq!(REQUEST_INDEX_REBUILDS.with(Cell::get), rebuilds);
+        assert_eq!(cache.stats().evictions.expired_ttl, 1);
     }
 
     #[test]

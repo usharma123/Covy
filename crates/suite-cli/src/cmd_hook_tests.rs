@@ -796,3 +796,28 @@ fn hook_runtime_config_rejects_non_file_path_as_unreadable() {
     );
     assert!(path.is_dir());
 }
+
+#[test]
+fn disabled_hooks_never_bootstrap_background_processes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = packet28_daemon_protocol::paths::hook_runtime_config_path(dir.path());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let config = HookRuntimeConfig {
+        hooks_enabled: false,
+        ..HookRuntimeConfig::default()
+    };
+    std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+    for event in ["SessionStart", "SubagentStart", "SubagentStop", "Stop"] {
+        let outcome =
+            process_claude_hook_payload(dir.path(), None, &json!({"hook_event_name": event}), true)
+                .unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.body.is_none());
+    }
+    assert!(!dir.path().join(".packet28/daemon/runtime.json").exists());
+    assert!(!dir.path().join(".packet28/daemon/packet28d.log").exists());
+    assert!(!dir
+        .path()
+        .join(".packet28/daemon/packet28-hook-http.log")
+        .exists());
+}

@@ -477,8 +477,11 @@ def release_package_smoke_errors(
         "release publish": release_publish_job,
     }
     for job_name, job in node_jobs.items():
-        if node_action not in job or "node-version: 20.20.2" not in job:
-            errors.append(f"{job_name} must pin the reviewed Node 20.20.2 action")
+        version = "24.16.0" if job_name == "release publish" else "20.20.2"
+        if node_action not in job or f"node-version: {version}" not in job:
+            errors.append(f"{job_name} must pin the reviewed Node {version} action")
+    if "NODE_AUTH_TOKEN:" in release_publish_job or "secrets.NPM_TOKEN" in release_publish_job:
+        errors.append("release publish must use OIDC without an npm token")
 
     expected_modes = {
         "smoke_mode: native": 2,
@@ -502,6 +505,18 @@ def release_package_smoke_errors(
         errors.append("macOS x86_64 execution limitation is not explicit")
 
     required_release_fragments = {
+        "Linux x64 preload shim must use the GNU target": (
+            "shim_target: x86_64-unknown-linux-gnu"
+        ),
+        "Linux ARM64 preload shim must use the GNU target": (
+            "shim_target: aarch64-unknown-linux-gnu"
+        ),
+        "preload shim must be built separately from static musl executables": (
+            'cross build --release --locked --target "${{ matrix.shim_target }}" --package context-instruct-shim'
+        ),
+        "preload shim must be staged from its shared-library target": (
+            'ARTIFACT_TARGET="${{ matrix.shim_target }}"'
+        ),
         "Linux ARM64 emulator package is not installed": (
             "sudo apt-get install -y --no-install-recommends qemu-user"
         ),

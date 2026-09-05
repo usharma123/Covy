@@ -482,6 +482,26 @@ class ReleasePackageSmokePolicyTests(unittest.TestCase):
     def test_repository_release_package_smoke_is_complete(self) -> None:
         self.assertEqual(self.errors(), [])
 
+    def test_rejects_static_musl_target_for_preload_library(self) -> None:
+        unsafe = self.release.replace(
+            '--target "${{ matrix.shim_target }}" --package context-instruct-shim',
+            '--target "${{ matrix.target }}" --package context-instruct-shim',
+        )
+        self.assertIn(
+            "preload shim must be built separately from static musl executables",
+            self.errors(release=unsafe),
+        )
+
+    def test_rejects_preload_library_staged_from_static_target(self) -> None:
+        unsafe = self.release.replace(
+            'ARTIFACT_TARGET="${{ matrix.shim_target }}"',
+            'ARTIFACT_TARGET="${{ matrix.target }}"',
+        )
+        self.assertIn(
+            "preload shim must be staged from its shared-library target",
+            self.errors(release=unsafe),
+        )
+
     def test_rejects_missing_pre_upload_binary_smoke(self) -> None:
         unsafe = self.release.replace(
             "python3 scripts/verify_release_packages.py platform",

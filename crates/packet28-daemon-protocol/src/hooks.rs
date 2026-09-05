@@ -37,10 +37,34 @@ pub enum HookBoundaryKind {
 #[serde(rename_all = "snake_case")]
 pub enum RelaunchPreference {
     /// Daemon will auto-relaunch the agent when handoff is ready at a stop boundary.
-    #[default]
+    /// Opt-in only: requires an explicit, user-provided `relaunch_command`.
     DaemonManaged,
     /// Disable auto-relaunch; the host is responsible for restarting.
+    #[default]
     HostManaged,
+}
+
+/// Returns true when `command` is one of the relaunch commands that earlier
+/// `Packet28 setup` releases wrote automatically (`claude --continue`, or the
+/// `packet28-agent` wrapper). Neither is a valid headless relaunch target:
+/// `claude --continue` resumes the *most recent* conversation in the workspace
+/// (usually the user's live session) and spawns a fresh Claude process on every
+/// stop boundary. The daemon refuses to relaunch these so stale configs written
+/// by older releases cannot multiply agent processes.
+pub fn is_legacy_generated_relaunch_command(command: &[String]) -> bool {
+    let Some(program) = command.first() else {
+        return false;
+    };
+    let program_name = std::path::Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program.as_str());
+    if program_name == "packet28-agent" {
+        return true;
+    }
+    program_name == "claude"
+        && command.len() == 2
+        && matches!(command[1].as_str(), "--continue" | "-c")
 }
 
 /// Graduated context pressure level. The daemon computes this from the
@@ -228,6 +252,14 @@ fn default_force_fraction() -> f64 {
 }
 
 impl HookRuntimeConfig {
+    /// True only when the user explicitly opted into daemon-managed relaunch
+    /// with a command that is not one of the legacy auto-generated defaults.
+    pub fn daemon_relaunch_enabled(&self) -> bool {
+        self.relaunch_preference == RelaunchPreference::DaemonManaged
+            && !self.relaunch_command.is_empty()
+            && !is_legacy_generated_relaunch_command(&self.relaunch_command)
+    }
+
     pub fn soft_threshold_fraction_value(&self) -> f64 {
         Some(self.soft_threshold_fraction)
             .filter(|value| *value > 0.0)
@@ -299,7 +331,7 @@ impl Default for HookRuntimeConfig {
             warn_threshold_fraction: default_warn_fraction(),
             prepare_threshold_fraction: default_prepare_fraction(),
             force_threshold_fraction: default_force_fraction(),
-            relaunch_preference: RelaunchPreference::DaemonManaged,
+            relaunch_preference: RelaunchPreference::HostManaged,
             relaunch_command: Vec::new(),
             reducer_allowlist: vec![
                 "claude_native".to_string(),

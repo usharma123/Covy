@@ -9,5 +9,5 @@ function serveArgs(args) {
 await launchNative(
   "Packet28",
   ["mcp", "serve", ...serveArgs(process.argv.slice(2))],
-  { label: "Packet28 MCP server", searchPath: false },
+  { label: "Packet28 MCP server", pipeStdin: true, searchPath: false },
 );

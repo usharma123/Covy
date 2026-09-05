@@ -60,6 +60,11 @@ use crate::{
 /// state fails closed before readiness is published.
 pub fn serve(root: PathBuf) -> Result<()> {
     let root = resolve_root(&root);
+
+    // Leave the spawning hook's process group/session so the host tearing
+    // down a finished hook cannot take the daemon with it.
+    packet28_daemon_protocol::process::detach_from_parent_session();
+
     std::env::set_current_dir(&root)
         .with_context(|| format!("failed to set daemon cwd to '{}'", root.display()))?;
     let daemon_instance_lease = acquire_daemon_instance_lease(&root)?;

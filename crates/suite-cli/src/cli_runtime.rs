@@ -9,9 +9,9 @@ use crate::{
     cmd_dashboard, cmd_diff, cmd_digest, cmd_discover, cmd_doctor, cmd_feedback, cmd_graph,
     cmd_guard, cmd_hook, cmd_hypothesis, cmd_impact, cmd_init, cmd_learn, cmd_map, cmd_map_query,
     cmd_map_repo, cmd_mcp, cmd_memory, cmd_packet, cmd_plan, cmd_proxy, cmd_run, cmd_setup,
-    cmd_shard, cmd_shell, cmd_stack, cmd_system, cmd_transcript, cmd_verify, cmd_wakeup,
-    BuildCommands, Cli, Commands, ContextCommands, CoverCommands, DiffCommands, GuardCommands,
-    MapCommands, StackCommands, TestCommands,
+    cmd_shard, cmd_shell, cmd_stack, cmd_system, cmd_transcript, cmd_uninstall, cmd_verify,
+    cmd_wakeup, BuildCommands, Cli, Commands, ContextCommands, CoverCommands, DiffCommands,
+    GuardCommands, MapCommands, StackCommands, TestCommands,
 };
 
 pub fn main_entry() {
@@ -223,6 +223,7 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Some(Commands::Daemon(daemon)) => cmd_daemon::run(daemon),
         Some(Commands::Doctor(args)) => cmd_doctor::run(args),
         Some(Commands::Setup(args)) => cmd_setup::run(args),
+        Some(Commands::Uninstall(args)) => cmd_uninstall::run(args),
         Some(Commands::Init(args)) => cmd_init::run(args),
         Some(Commands::Run(args)) => cmd_run::run(args),
         Some(Commands::Verify(args)) => cmd_verify::run(args),
@@ -596,6 +597,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Some(Commands::Mcp(_))
         | Some(Commands::Hook(_))
         | Some(Commands::Setup(_))
+        | Some(Commands::Uninstall(_))
         | Some(Commands::Init(_))
         | Some(Commands::Run(_))
         | Some(Commands::Verify(_))
