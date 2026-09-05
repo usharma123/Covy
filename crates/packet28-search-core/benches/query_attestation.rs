@@ -1,5 +1,5 @@
-use std::hint::black_box;
 use std::fs;
+use std::hint::black_box;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
