@@ -69,7 +69,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 quick-xml = { version = "0.41", features = ["serialize"] }
 
 # CLI
-clap = { version = "4.3.4", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
 colored = "3"
 comfy-table = "7"
 glob = "0.3"
