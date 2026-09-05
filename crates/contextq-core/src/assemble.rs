@@ -950,8 +950,11 @@ fn enforce_budget(payload: &mut AssembledPayload, options: &AssembleOptions) {
 
         if let Some(last) = payload.sections.last_mut() {
             if last.body.len() > 64 {
-                let new_len = (last.body.len() * 3) / 4;
-                last.body.truncate(new_len.max(32));
+                let mut new_len = ((last.body.len() * 3) / 4).max(32);
+                while !last.body.is_char_boundary(new_len) {
+                    new_len -= 1;
+                }
+                last.body.truncate(new_len);
                 last.body.push_str(" ...");
                 continue;
             }
@@ -961,6 +964,10 @@ fn enforce_budget(payload: &mut AssembledPayload, options: &AssembleOptions) {
             payload.sections.pop();
             continue;
         }
+
+        // Source provenance and the required JSON envelope cannot be pruned.
+        // Return their actual cost when the requested budget cannot contain them.
+        break;
     }
 }
 
@@ -990,5 +997,70 @@ impl PartialOrd for F64Ord {
 impl Ord for F64Ord {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.0.total_cmp(&other.0)
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn pruning_preserves_utf8_boundaries() {
+        for body in ["é".repeat(35), "漢".repeat(25), "🦀".repeat(33)] {
+            let mut payload = AssembledPayload {
+                sections: vec![ContextSection {
+                    title: "Evidence".to_string(),
+                    body,
+                    ..ContextSection::default()
+                }],
+                ..AssembledPayload::default()
+            };
+            let options = AssembleOptions {
+                budget_bytes: estimate_json_bytes(&payload) - 1,
+                ..AssembleOptions::default()
+            };
+
+            enforce_budget(&mut payload, &options);
+
+            assert!(payload.truncated);
+            assert_eq!(payload.sections.len(), 1);
+            assert!(payload.sections[0].body.ends_with(" ..."));
+            assert!(estimate_json_bytes(&payload) <= options.budget_bytes);
+        }
+    }
+
+    #[test]
+    fn budgets_below_metadata_floor_return_truncated_metadata() {
+        for budget in [0, 1] {
+            for packets in [
+                Vec::new(),
+                vec![InputPacket {
+                    packet_id: Some("source-id".repeat(32)),
+                    ..InputPacket::default()
+                }],
+            ] {
+                let source_count = packets.len();
+                let assembled = assemble_packets(
+                    packets,
+                    AssembleOptions {
+                        budget_tokens: budget,
+                        budget_bytes: budget as usize,
+                        ..AssembleOptions::default()
+                    },
+                );
+                let payload: AssembledPayload =
+                    serde_json::from_value(assembled.payload.clone()).unwrap();
+                assert!(payload.truncated);
+                assert!(assembled.assembly.truncated);
+                assert!(payload.sections.is_empty());
+                assert!(payload.refs.is_empty());
+                assert_eq!(payload.sources.len(), source_count);
+                assert_eq!(
+                    assembled.assembly.estimated_bytes,
+                    serde_json::to_vec(&assembled.payload).unwrap().len()
+                );
+                assert!(assembled.assembly.estimated_bytes > budget as usize);
+            }
+        }
     }
 }
