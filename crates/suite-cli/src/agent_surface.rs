@@ -48,123 +48,45 @@ pub fn render_prompt_fragment(format: AgentPromptFormat, root: Option<&str>) -> 
     let mcp = mcp_command_example(root);
     let proxy = mcp_proxy_command_example(root);
     let wrapper = wrapper_command_example();
-    let root_note = if root.is_some() {
-        format!(
-            "Use `--root {ROOT_PLACEHOLDER}` only when the agent is operating outside the repository root."
-        )
-    } else {
-        "Use `--root <path>` only when the agent is operating outside the repository root."
-            .to_string()
+    let (header, runtime_note, tool_prefix) = match format {
+        AgentPromptFormat::Claude => (
+            "## Packet28\n",
+            "Let Claude hooks installed by `Packet28 setup` rewrite supported shell commands and capture tool activity.\n",
+            "packet28.",
+        ),
+        AgentPromptFormat::Agents => (
+            "## Packet28 Guidance\n",
+            "Let runtime hooks installed by `Packet28 setup` rewrite supported shell commands and capture tool activity.\n",
+            "packet28.",
+        ),
+        AgentPromptFormat::Cursor | AgentPromptFormat::CursorRule => (
+            if format == AgentPromptFormat::CursorRule {
+                "---\ndescription: Packet28 runtime guidance\nglobs:\nalwaysApply: true\n---\n\n# Packet28 Integration\n"
+            } else {
+                "Packet28 integration:\n"
+            },
+            "Cursor tool names use `packet28_*`; dotted aliases work where supported.\n",
+            "packet28_",
+        ),
+        AgentPromptFormat::WindsurfRule => (
+            "---\ndescription: Packet28 runtime guidance\ntrigger: always_on\n---\n\n# Packet28 Integration\n",
+            "Use MCP tools and rules in Windsurf; command rewriting requires confirmation from `Packet28 doctor --agent windsurf`.\n",
+            "packet28.",
+        ),
     };
 
-    match format {
-        AgentPromptFormat::Claude => format!(
-            "## Packet28\n\
-Use Packet28 as a hooks-first reducer-plus-handoff runtime for non-trivial coding, debugging, test, review, refactor, or design tasks.\n\
-\n\
-- Start with `{mcp}` and install Claude hooks with `Packet28 setup`.\n\
-- Let Claude hooks rewrite supported shell reads/searches and auto-capture routine tool activity; keep reducer traffic out of the visible MCP loop.\n\
-- For search, prefer `p28` instant grep when available; use `packet28.read_regions` and `packet28.glob` for compact in-turn exploration, then `packet28.fetch_tool_result` only when you need the stored full artifact.\n\
-- Use `packet28.write_intention` only when the task objective, current decision, or next step changes materially.\n\
-- Use `packet28.task_status` only when you need to inspect handoff readiness or the latest artifact IDs for a task.\n\
-- Use `packet28.prepare_handoff` and `packet28.fetch_context` only at checkpoint, resume, or explicit artifact-inspection boundaries.\n\
-- If Packet28 is fronting upstream MCP tools via proxy, prefer `{proxy}` so upstream activity is captured into the next brief automatically.\n\
-- For delegated relaunch flows, prefer `{wrapper}` or daemon-managed fresh-worker resume instead of stretching one worker session indefinitely.\n\
-- Treat the latest Packet28 brief as the only canonical Packet28 context block; replace older Packet28 blocks instead of appending them.\n\
-- Respect the supersession header in each brief and use it to ignore older Packet28 context.\n\
-- Use `packet28://task/<task_id>/brief` or `.packet28/task/<task_id>/brief.md` only as a fallback bridge when MCP is unavailable.\n\
-- If Packet28 is unavailable or returns insufficient context, fall back to direct file reads and commands.\n\
-- Do not force handoff/bootstrap orchestration for trivial conversational requests or narrow single-file edits.\n\
-- {root_note}\n"
-        ),
-        AgentPromptFormat::Agents => format!(
-            "## Packet28 Guidance\n\
-When the task is substantial, use Packet28 as a hooks-first reducer-plus-handoff runtime.\n\
-\n\
-- MCP command: `{mcp}`\n\
-- Preferred MCP endpoint when available: `{proxy}`\n\
-- Use runtime hooks installed by `Packet28 setup`, not visible reducer MCP calls, to rewrite supported shell commands and capture routine tool activity into Packet28.\n\
-- For search, prefer `p28` instant grep when available; use `packet28.read_regions` and `packet28.glob` for compact exploration, then `packet28.fetch_tool_result` only when you need the stored full artifact.\n\
-- Use `packet28.write_intention` only when the task objective, current decision, or next step changes materially.\n\
-- Use `packet28.task_status` only when you need to inspect handoff readiness or the latest artifact IDs.\n\
-- Use `packet28.prepare_handoff` only at checkpoint or handoff boundaries, not as a normal exploration step.\n\
-- Replace the prior Packet28 context block each turn instead of appending historical Packet28 briefs.\n\
-- Keep thick context assembly out of the active worker loop; use `packet28.fetch_context` only for explicit handoff/bootstrap or artifact inspection.\n\
-- Let the daemon or `{wrapper}` own fresh-worker relaunch from the prepared handoff packet.\n\
-- Respect the supersession header in each brief and keep one mutable Packet28 block in the runtime prompt.\n\
-- Use the task brief file/resource only as a compatibility fallback when MCP is unavailable.\n\
-- Fall back to direct file reads if Packet28 is unavailable, errors, or does not provide enough context.\n\
-- Skip handoff/bootstrap ceremony for trivial chat or isolated single-file edits.\n\
-- {root_note}\n"
-        ),
-        AgentPromptFormat::Cursor => format!(
-            "Packet28 integration:\n\
-- Start `{mcp}` and use Packet28 as a control-plane plus handoff broker.\n\
-- Prefer `{proxy}` when you want Packet28 to auto-capture upstream tool activity.\n\
-- Cursor MCP tool names use `packet28_*` underscores; legacy dotted aliases still work where the client permits them.\n\
-- For search, prefer `p28` instant grep when available; use `packet28_read_regions` (`packet28.read_regions`) and `packet28_glob` (`packet28.glob`) when compact native read/list output matters in-turn; use `packet28_fetch_tool_result` (`packet28.fetch_tool_result`) for stored full artifacts.\n\
-- Use `packet28_write_intention` (`packet28.write_intention`) for semantic objective updates and keep rewrite/capture out of the visible MCP loop.\n\
-- Use `packet28_task_status` only when you need handoff readiness or artifact IDs.\n\
-- For checkpointed relaunch flows, use `packet28_prepare_handoff` (`packet28.prepare_handoff`) to seed the next worker.\n\
-- Keep one mutable Packet28 context block and replace it whenever a newer brief supersedes the old one.\n\
-- Use `packet28_fetch_context` only when you explicitly need to inspect a stored handoff or context artifact.\n\
-- Prefer `{wrapper}` or daemon-managed relaunch after checkpointed handoff assembly instead of keeping one session hot.\n\
-- Respect the supersession header in each brief and use it to discard older Packet28 reasoning context.\n\
-- Use `.packet28/task/<task_id>/brief.md` only as a fallback bridge when MCP is unavailable.\n\
-- If Packet28 is unavailable, fails, or returns insufficient context, fall back to direct file reads and commands.\n\
-- Do not force handoff/bootstrap orchestration for trivial chat or isolated single-file edits.\n\
-- {root_note}\n"
-        ),
-        AgentPromptFormat::CursorRule => format!(
-            "---\n\
-description: Packet28 runtime guidance\n\
-globs:\n\
-alwaysApply: true\n\
----\n\
-\n\
-# Packet28 Integration\n\
-\n\
-- Start `{mcp}` and use Packet28 as a control-plane plus handoff broker.\n\
-- Prefer `{proxy}` when you want Packet28 to auto-capture upstream tool activity.\n\
-- Cursor MCP tool names use `packet28_*` underscores; legacy dotted aliases still work where the client permits them.\n\
-- For search, prefer `p28` instant grep when available; use `packet28_read_regions` and `packet28_glob` when compact native read/list output matters in-turn; use `packet28_fetch_tool_result` for stored full artifacts.\n\
-- Use `packet28_write_intention` for semantic objective updates and keep rewrite/capture out of the visible MCP loop.\n\
-- Use `packet28_task_status` only when you need handoff readiness or artifact IDs.\n\
-- For checkpointed relaunch flows, use `packet28_prepare_handoff` to seed the next worker.\n\
-- Keep one mutable Packet28 context block and replace it whenever a newer brief supersedes the old one.\n\
-- Use `packet28_fetch_context` only when you explicitly need to inspect a stored handoff or context artifact.\n\
-- Prefer `{wrapper}` or daemon-managed relaunch after checkpointed handoff assembly instead of keeping one session hot.\n\
-- Respect the supersession header in each brief and use it to discard older Packet28 reasoning context.\n\
-- Use `.packet28/task/<task_id>/brief.md` only as a fallback bridge when MCP is unavailable.\n\
-- If Packet28 is unavailable, fails, or returns insufficient context, fall back to direct file reads and commands.\n\
-- Do not force handoff/bootstrap orchestration for trivial chat or isolated single-file edits.\n\
-- {root_note}\n"
-        ),
-        AgentPromptFormat::WindsurfRule => format!(
-            "---\n\
-description: Packet28 runtime guidance\n\
-trigger: always_on\n\
----\n\
-\n\
-# Packet28 Integration\n\
-\n\
-- Start `{mcp}` and use Packet28 as a control-plane plus handoff broker.\n\
-- Windsurf command rewrite is not guaranteed; use Packet28 MCP tools and rules as the verified integration surface unless `Packet28 doctor --agent windsurf` reports a stronger tier.\n\
-- Prefer `{proxy}` when you want Packet28 to auto-capture upstream tool activity.\n\
-- For search, prefer `p28` instant grep when available; use `packet28.read_regions` and `packet28.glob` when compact native read/list output matters in-turn; use `packet28.fetch_tool_result` for stored full artifacts.\n\
-- Use `packet28.write_intention` for semantic objective updates and keep rewrite/capture out of the visible MCP loop.\n\
-- Use `packet28.task_status` only when you need handoff readiness or artifact IDs.\n\
-- For checkpointed relaunch flows, use `packet28.prepare_handoff` to seed the next worker.\n\
-- Keep one mutable Packet28 context block and replace it whenever a newer brief supersedes the old one.\n\
-- Use `packet28.fetch_context` only when you explicitly need to inspect a stored handoff or context artifact.\n\
-- Prefer `{wrapper}` or daemon-managed relaunch after checkpointed handoff assembly instead of keeping one session hot.\n\
-- Respect the supersession header in each brief and use it to discard older Packet28 reasoning context.\n\
-- Use `.packet28/task/<task_id>/brief.md` only as a fallback bridge when MCP is unavailable.\n\
-- If Packet28 is unavailable, fails, or returns insufficient context, fall back to direct file reads and commands.\n\
-- Do not force handoff/bootstrap orchestration for trivial chat or isolated single-file edits.\n\
-- {root_note}\n"
-        ),
-    }
+    format!(
+        "{header}\n\
+Use Packet28 for substantial work; skip handoff setup for trivial chat or isolated single-file edits.\n\
+{runtime_note}\n\
+- Start `{mcp}`; use `{proxy}` to capture upstream MCP activity.\n\
+- Prefer `p28` instant grep when available; use `{tool_prefix}read_regions` and `{tool_prefix}glob` for compact reads, and `{tool_prefix}fetch_tool_result` for the full stored artifact.\n\
+- Call `{tool_prefix}write_intention` when the objective, decision, or next step changes; `{tool_prefix}task_status` only for readiness or artifact IDs. Let hooks handle routine capture.\n\
+- Use `{tool_prefix}prepare_handoff` at checkpoints and `{tool_prefix}fetch_context` for resume or explicit artifact inspection. Let the daemon or `{wrapper}` resume a fresh worker.\n\
+- Keep repository instructions stable. Use the newest brief's supersession header to resolve stale task context. Put brief updates after stable instructions; do not rewrite earlier conversation messages. At compaction or fresh-worker resume, include only the latest brief.\n\
+- If MCP is unavailable, read `packet28://task/<task_id>/brief` or `.packet28/task/<task_id>/brief.md`. If Packet28 fails or lacks context, fall back to direct file reads and commands.\n\
+- Use `--root {ROOT_PLACEHOLDER}` only outside the repository root.\n"
+    )
 }
 
 fn command_root_fragment(root: Option<&str>) -> String {
@@ -189,7 +111,7 @@ mod tests {
     #[test]
     fn claude_fragment_contains_required_guidance() {
         let rendered = render_prompt_fragment(AgentPromptFormat::Claude, None);
-        assert!(rendered.contains("hooks-first reducer-plus-handoff runtime"));
+        assert!(rendered.contains("Use Packet28 for substantial work"));
         assert!(rendered.contains("p28` instant grep"));
         assert!(rendered.contains("packet28.read_regions"));
         assert!(rendered.contains("packet28.write_intention"));
@@ -204,7 +126,7 @@ mod tests {
     #[test]
     fn agents_fragment_tracks_current_workflow() {
         let rendered = render_prompt_fragment(AgentPromptFormat::Agents, None);
-        assert!(rendered.contains("hooks-first reducer-plus-handoff runtime"));
+        assert!(rendered.contains("Use Packet28 for substantial work"));
         assert!(rendered.contains("p28` instant grep"));
         assert!(rendered.contains("packet28.read_regions"));
         assert!(rendered.contains("packet28.fetch_tool_result"));
@@ -243,5 +165,52 @@ mod tests {
         assert!(rendered.starts_with("---\n"));
         assert!(rendered.contains("trigger: always_on"));
         assert!(rendered.contains("# Packet28 Integration"));
+    }
+    #[test]
+    fn fragments_keep_stable_instructions_separate_from_brief_updates() {
+        for format in [
+            AgentPromptFormat::Claude,
+            AgentPromptFormat::Agents,
+            AgentPromptFormat::Cursor,
+            AgentPromptFormat::CursorRule,
+            AgentPromptFormat::WindsurfRule,
+        ] {
+            let rendered = render_prompt_fragment(format, None);
+            assert!(rendered.contains("do not rewrite earlier conversation messages"));
+            assert!(rendered
+                .contains("At compaction or fresh-worker resume, include only the latest brief"));
+            assert_eq!(rendered.matches("supersession").count(), 1);
+            let prefix = if matches!(
+                format,
+                AgentPromptFormat::Cursor | AgentPromptFormat::CursorRule
+            ) {
+                "packet28_"
+            } else {
+                "packet28."
+            };
+            for tool in [
+                "read_regions",
+                "glob",
+                "fetch_tool_result",
+                "write_intention",
+                "task_status",
+                "prepare_handoff",
+                "fetch_context",
+            ] {
+                assert_eq!(rendered.matches(&format!("`{prefix}{tool}`")).count(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn only_hook_backends_recommend_installed_command_rewriting() {
+        for format in [AgentPromptFormat::Claude, AgentPromptFormat::Agents] {
+            assert!(render_prompt_fragment(format, None).contains("`Packet28 setup`"));
+        }
+        for format in [AgentPromptFormat::Cursor, AgentPromptFormat::CursorRule] {
+            assert!(!render_prompt_fragment(format, None).contains("`Packet28 setup`"));
+        }
+        let windsurf = render_prompt_fragment(AgentPromptFormat::WindsurfRule, None);
+        assert!(windsurf.contains("command rewriting requires confirmation"));
     }
 }
