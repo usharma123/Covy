@@ -54,3 +54,64 @@ fn budget_fixture_is_trimmed_to_caps() {
     assert!(assembled.assembly.estimated_tokens <= 40);
     assert!(assembled.assembly.estimated_bytes <= 400);
 }
+
+#[test]
+fn rejected_sections_do_not_consume_reference_deduplication_state() {
+    use contextq_core::{
+        AssembleOptions, AssembledPayload, ContextRef, ContextSection, InputPacket,
+    };
+
+    let reference = ContextRef {
+        kind: "file".to_string(),
+        value: "src/lib.rs".to_string(),
+        ..ContextRef::default()
+    };
+    let sections = [
+        ("oversized", "x".repeat(20_000), 3.0),
+        ("kept", "failure".to_string(), 2.0),
+        ("also kept", "follow-up".to_string(), 1.0),
+    ]
+    .into_iter()
+    .map(|(title, body, relevance)| ContextSection {
+        title: title.to_string(),
+        body,
+        refs: vec![reference.clone()],
+        relevance: Some(relevance),
+        ..ContextSection::default()
+    })
+    .collect::<Vec<_>>();
+
+    for compact_assembly in [false, true] {
+        for (budget_tokens, budget_bytes) in [(2_000, usize::MAX), (u64::MAX, 2_000)] {
+            let assembled = contextq_core::assemble_packets(
+                vec![InputPacket {
+                    packet_id: Some("evidence".to_string()),
+                    sections: sections.clone(),
+                    ..InputPacket::default()
+                }],
+                AssembleOptions {
+                    budget_tokens,
+                    budget_bytes,
+                    compact_assembly,
+                    ..AssembleOptions::default()
+                },
+            );
+            let payload: AssembledPayload = serde_json::from_value(assembled.payload).unwrap();
+
+            assert_eq!(payload.sections.len(), 2);
+            assert_eq!(payload.sections[0].title, "kept");
+            assert_eq!(
+                payload.sections[0].refs.len(),
+                usize::from(!compact_assembly)
+            );
+            assert!(payload.sections[1].refs.is_empty());
+            assert_eq!(payload.refs.len(), 1);
+            assert_eq!(payload.refs[0].value, "src/lib.rs");
+            assert_eq!(assembled.assembly.refs_input, 1);
+            assert_eq!(assembled.assembly.refs_dropped, 0);
+            assert_eq!(assembled.assembly.sections_dropped, 1);
+            assert!(assembled.assembly.estimated_tokens <= budget_tokens);
+            assert!(assembled.assembly.estimated_bytes <= budget_bytes);
+        }
+    }
+}

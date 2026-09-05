@@ -167,7 +167,9 @@ pub fn assemble_packets(
     let mut selected_sections = Vec::new();
 
     for (_, _, _, mut section) in all_sections {
-        section.refs.retain(|r| seen_ref_keys.insert(ref_key(r)));
+        section
+            .refs
+            .retain(|r| !seen_ref_keys.contains(&ref_key(r)));
 
         let section_tokens = estimate_section_tokens(&section);
         let section_bytes = estimate_json_bytes(&section);
@@ -178,6 +180,7 @@ pub fn assemble_packets(
             continue;
         }
 
+        seen_ref_keys.extend(section.refs.iter().map(ref_key));
         used_tokens = used_tokens.saturating_add(section_tokens);
         used_bytes = used_bytes.saturating_add(section_bytes);
         selected_sections.push(section);
