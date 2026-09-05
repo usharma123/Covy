@@ -66,6 +66,44 @@ rendering: the first six focus paths, first eight focus symbols, and first four
 open-question texts. Unrelated event counts, tool history, and decision state
 cannot create apparent prefix drift.
 
+## Placement in a provider prompt
+
+Keep repository instructions and tool definitions in a stable prefix. Place
+changing task briefs after it. A supersession header changes which brief is
+current; it does not require editing an earlier conversation message. During an
+active conversation, append a brief update only when it adds useful state. At
+compaction or fresh-worker resume, assemble the latest brief without copying
+superseded briefs. Compaction can require warming a new provider prefix.
+
+Generated runtime guidance uses this distinction. It shares one workflow across
+formats while retaining backend-specific tool names, rule frontmatter, and hook
+capabilities. Installing updated guidance changes the prefix once; leave it
+unchanged during the task.
+
+[OpenAI's prompt-caching guidance](https://developers.openai.com/api/docs/guides/prompt-caching#how-to-optimize-prompt-caching)
+recommends stable instructions/tool definitions and preserving earlier messages.
+[Anthropic's prompt-caching documentation](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
+defines a cumulative prefix through tools, system content, and messages, with
+cache breakpoints. A change before a reusable boundary can invalidate reuse.
+The host that builds the model request owns cache keys, breakpoints, and usage
+telemetry. Packet28's renderer cache cannot set or prove those provider choices.
+
+## Where cache-augmented generation fits
+
+The original [CAG implementation](https://github.com/hhhuang/CAG) preloads a
+bounded knowledge collection into the model's KV cache. Packet28's durable
+packet store is not a model KV cache. Loading the entire repository into each
+prompt would also work against bounded context and make source changes costly.
+
+A compatible experiment would preload a small, versioned set of stable
+repository rules or reference material, then retrieve fresh task-specific
+evidence after that prefix. Keep it opt-in, bound its size, and invalidate it
+when its source bytes change. Do not pad prompts merely to reach a provider's
+cache threshold. Compare useful context coverage, input tokens, cache reads and
+writes, latency, and actual cost against the existing bounded assembly. Local
+hash stability and fewer rendered bytes establish neither provider savings nor
+instruction adherence. No provider-backed CAG execution is implemented here.
+
 ## Telemetry evidence boundary
 
 `packet28.instruction_cache_experiment.v1` records local renderer reuse and

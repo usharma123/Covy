@@ -67,7 +67,11 @@ pub struct RecallOptions {
     pub task_id: Option<String>,
     pub scope: RecallScope,
     pub packet_types: Vec<String>,
+    /// When nonempty, require at least one path filter match independently of
+    /// query matches. Uses normalized paths, substrings, and unambiguous basenames.
     pub path_filters: Vec<String>,
+    /// When nonempty, require at least one case-insensitive symbol substring
+    /// match independently of query matches and any path filters.
     pub symbol_filters: Vec<String>,
     pub mode: RecallMode,
     pub include_debug: bool,

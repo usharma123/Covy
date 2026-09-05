@@ -124,6 +124,10 @@ fn test_setup_windsurf_preserves_existing_mcp_servers_and_hooks() {
     );
     assert_eq!(mcp_config["mcpServers"]["existing"]["args"][0], "--flag");
     assert_eq!(mcp_config["mcpServers"]["packet28"]["args"][0], "--root");
+    assert_eq!(
+        mcp_config["mcpServers"]["packet28"]["args"][1],
+        root.path().display().to_string()
+    );
 
     let hooks: Value = serde_json::from_str(&fs::read_to_string(hooks_path).unwrap()).unwrap();
     let pre_run = hooks["hooks"]["pre_run_command"].as_array().unwrap();

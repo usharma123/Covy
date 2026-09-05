@@ -23,6 +23,7 @@ const REVIEWED_MODULES: &[(&str, &str)] = &[
     ("index", "index state and process tests"),
     ("message", "frozen request/response compatibility tests"),
     ("paths", "deterministic endpoint and confinement tests"),
+    ("process", "session-detach child-process tests"),
     (
         "registry",
         "runnable additive migration example and JSON tests",

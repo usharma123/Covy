@@ -230,6 +230,15 @@ pub(crate) fn process_claude_hook_payload(
     let event_kind = event_override
         .map(|value| parse_event_kind(Some(value)))
         .unwrap_or_else(|| parse_event_kind(json_string(payload, "hook_event_name").as_deref()));
+
+    if !runtime_config.hooks_enabled {
+        // Kill switch: never start the HTTP hook server or the daemon when
+        // hooks are disabled for this workspace (`Packet28 uninstall`).
+        return Ok(ClaudeHookOutcome {
+            exit_code: 0,
+            body: None,
+        });
+    }
     if bootstrap_http_server
         && matches!(
             event_kind,
@@ -340,6 +349,12 @@ fn process_runtime_hook_payload(
 ) -> Result<RuntimeHookOutcome> {
     let root = resolve_runtime_hook_root(&args, &payload);
     let runtime_config = load_hook_runtime_config(&root)?;
+    if !runtime_config.hooks_enabled {
+        return Ok(RuntimeHookOutcome {
+            exit_code: 0,
+            body: None,
+        });
+    }
     crate::broker_client::ensure_daemon(&root)?;
     let _writer_lease = acquire_task_store_writer_lease(&root)?;
 

@@ -42,6 +42,7 @@ deliberate coverage, not an undocumented omission.
 | packet28-daemon-protocol | index | excluded | index-state-process-tests |
 | packet28-daemon-protocol | message | excluded | request-response-json-tests |
 | packet28-daemon-protocol | paths | excluded | path-endpoint-tests |
+| packet28-daemon-protocol | process | excluded | session-detach-process-tests |
 | packet28-daemon-protocol | registry | covered | protocol-registry-migration-runnable+json-compat-tests |
 | packet28-daemon-protocol | task | covered | protocol-task-lifecycle-runnable+compile_fail |
 | packet28-daemon-protocol | root_compatibility | excluded | exact-two-name-root-allowlist |
@@ -64,6 +65,7 @@ deliberate coverage, not an undocumented omission.
 <!-- packet28d-public owner=packet28-daemon-protocol item=index classification=excluded evidence=index-state-process-tests -->
 <!-- packet28d-public owner=packet28-daemon-protocol item=message classification=excluded evidence=request-response-json-tests -->
 <!-- packet28d-public owner=packet28-daemon-protocol item=paths classification=excluded evidence=path-endpoint-tests -->
+<!-- packet28d-public owner=packet28-daemon-protocol item=process classification=excluded evidence=session-detach-process-tests -->
 <!-- packet28d-public owner=packet28-daemon-protocol item=registry classification=covered evidence=protocol-registry-migration-runnable+json-compat-tests -->
 <!-- packet28d-public owner=packet28-daemon-protocol item=task classification=covered evidence=protocol-task-lifecycle-runnable+compile_fail -->
 <!-- packet28d-public owner=packet28-daemon-protocol item=root_compatibility classification=excluded evidence=exact-two-name-root-allowlist -->

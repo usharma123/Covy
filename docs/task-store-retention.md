@@ -393,3 +393,12 @@ must initialize the version-2 fields, and exhaustive matches over
 
 A [timestamped remediation-worktree snapshot](task-store-metrics/20260728/README.md)
 records the volatile evidence separately from this interface contract.
+
+## Implementation ownership
+
+The private `retention::scan` module owns read-only traversal, depth and entry
+budgets, metadata fingerprints, and byte/count aggregation. Path inspection and
+capability-relative revalidation use the same aggregation rules. Retention
+keeps candidate selection, authenticated registry snapshots, lease admission,
+and quarantine mutations. A successful scan supplies measurements; it does not
+authorize deletion or replace revalidation under the retention lease.

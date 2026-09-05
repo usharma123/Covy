@@ -3,7 +3,7 @@
     reason = "this lifecycle fixture exercises a focused subset of the shared harness"
 )]
 #[path = "process_harness.rs"]
-mod process_harness;
+pub mod process_harness;
 
 use assert_cmd::Command;
 use std::fs;

@@ -355,7 +355,6 @@ fn send_daemon_request_via_session(
     session: &Arc<Mutex<McpSessionState>>,
     request: &DaemonRequest,
 ) -> Result<DaemonResponse> {
-    crate::cmd_daemon::ensure_daemon(root)?;
     let mut guard = session
         .lock()
         .map_err(|_| anyhow!("failed to lock MCP session"))?;

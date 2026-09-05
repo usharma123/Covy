@@ -63,6 +63,7 @@ PROTOCOL_PUBLIC_MODULES = (
     "index",
     "message",
     "paths",
+    "process",
     "registry",
     "task",
 )

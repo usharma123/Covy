@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::runtime_integrations::{
-    antigravity, cline, copilot, cursor, gemini, hermes, kilocode, opencode, roo, windsurf,
+    antigravity, claude, cline, copilot, cursor, gemini, hermes, kilocode, opencode, roo, windsurf,
 };
 
 #[path = "cmd_doctor_mcp.rs"]
@@ -111,7 +111,7 @@ fn build_report(root: &Path, agent: Option<&str>) -> DoctorReport {
     let mcp_config_summary = summarize_mcp_config(root, &mcp_config);
     let mcp_round_trip = check_mcp_round_trip(root);
     let experiment_manifest = check_experiment_manifest(root);
-    let checks = vec![
+    let mut checks = vec![
         daemon.clone(),
         index.clone(),
         mcp_config_summary,
@@ -121,6 +121,10 @@ fn build_report(root: &Path, agent: Option<&str>) -> DoctorReport {
         mcp_round_trip.handoff_round_trip.clone(),
         experiment_manifest,
     ];
+    if matches!(agent, Some("claude")) {
+        checks.insert(2, check_claude_hook_config(root));
+        checks.insert(3, check_claude_hook_service(root));
+    }
     let ok = checks
         .iter()
         .filter(|check| check.required)
@@ -136,6 +140,142 @@ fn build_report(root: &Path, agent: Option<&str>) -> DoctorReport {
         push_notifications: mcp_round_trip.push_notifications,
         handoff_round_trip: mcp_round_trip.handoff_round_trip,
         checks,
+    }
+}
+
+fn check_claude_hook_config(root: &Path) -> DoctorCheck {
+    let path = claude::settings_path(root);
+    let result = (|| -> Result<String> {
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read '{}'", path.display()))?;
+        let value: Value = serde_json::from_str(&content)
+            .with_context(|| format!("invalid JSON in '{}'", path.display()))?;
+        let runtime_path = packet28_daemon_protocol::paths::hook_runtime_config_path(root);
+        let runtime_content = fs::read_to_string(&runtime_path)
+            .with_context(|| format!("failed to read '{}'", runtime_path.display()))?;
+        let runtime_config: packet28_daemon_protocol::hooks::HookRuntimeConfig =
+            serde_json::from_str(&runtime_content)
+                .with_context(|| format!("invalid JSON in '{}'", runtime_path.display()))?;
+        let port = runtime_config
+            .http_hook_port
+            .ok_or_else(|| anyhow!("hook runtime is missing http_hook_port"))?;
+        let token = runtime_config
+            .http_hook_token
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow!("hook runtime is missing http_hook_token"))?;
+        let expected_url = format!("http://127.0.0.1:{port}/packet28/claude-hook");
+
+        for event in ["SessionStart", "UserPromptSubmit"] {
+            let entries = value
+                .pointer(&format!("/hooks/{event}"))
+                .and_then(Value::as_array)
+                .ok_or_else(|| anyhow!("missing hooks.{event} array"))?;
+            let configured = entries.iter().any(|entry| {
+                entry
+                    .get("hooks")
+                    .and_then(Value::as_array)
+                    .is_some_and(|hooks| {
+                        hooks.iter().any(|hook| {
+                            hook.get("type").and_then(Value::as_str) == Some("command")
+                                && hook.get("command").and_then(Value::as_str).is_some_and(
+                                    |command| {
+                                        command.contains(" hook claude ")
+                                            && (command.contains("${CLAUDE_PROJECT_DIR}")
+                                                || command.contains(&root.display().to_string()))
+                                    },
+                                )
+                        })
+                    })
+            });
+            if !configured {
+                return Err(anyhow!(
+                    "Packet28 {event} command hook is missing or targets another workspace"
+                ));
+            }
+        }
+
+        for event in [
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "PreCompact",
+            "SessionEnd",
+            "Stop",
+            "SubagentStop",
+        ] {
+            let entries = value
+                .pointer(&format!("/hooks/{event}"))
+                .and_then(Value::as_array)
+                .ok_or_else(|| anyhow!("missing hooks.{event} array"))?;
+            let configured = entries.iter().any(|entry| {
+                entry
+                    .get("hooks")
+                    .and_then(Value::as_array)
+                    .is_some_and(|hooks| {
+                        hooks.iter().any(|hook| {
+                            hook.get("type").and_then(Value::as_str) == Some("http")
+                                && hook.get("url").and_then(Value::as_str)
+                                    == Some(expected_url.as_str())
+                                && hook
+                                    .pointer("/headers/X-Packet28-Hook-Token")
+                                    .and_then(Value::as_str)
+                                    == Some(token)
+                        })
+                    })
+            });
+            if !configured {
+                return Err(anyhow!(
+                    "Packet28 {event} HTTP hook does not match the local hook runtime"
+                ));
+            }
+        }
+
+        let allowed = value
+            .get("allowedHttpHookUrls")
+            .and_then(Value::as_array)
+            .is_some_and(|urls| urls.iter().any(|url| url.as_str() == Some(&expected_url)));
+        if !allowed {
+            return Err(anyhow!(
+                "allowedHttpHookUrls does not include the Packet28 hook endpoint"
+            ));
+        }
+
+        Ok(format!(
+            "Claude hooks match the local Packet28 runtime at {}",
+            path.display()
+        ))
+    })();
+    match result {
+        Ok(detail) => DoctorCheck {
+            name: "claude_hook_config",
+            ok: true,
+            required: true,
+            detail,
+        },
+        Err(error) => DoctorCheck {
+            name: "claude_hook_config",
+            ok: false,
+            required: true,
+            detail: format!("claude: {error}"),
+        },
+    }
+}
+
+fn check_claude_hook_service(root: &Path) -> DoctorCheck {
+    match crate::cmd_hook_http::check_hook_http_server(root) {
+        Ok(()) => DoctorCheck {
+            name: "claude_hook_http",
+            ok: true,
+            required: true,
+            detail: format!("Claude HTTP hook service is healthy for {}", root.display()),
+        },
+        Err(error) => DoctorCheck {
+            name: "claude_hook_http",
+            ok: false,
+            required: true,
+            detail: format!("claude: {error}"),
+        },
     }
 }
 
@@ -1262,6 +1402,32 @@ mod tests {
         let config_path = hermes::config_path(home);
         fs::create_dir_all(config_path.parent().unwrap()).unwrap();
         fs::write(config_path, config).unwrap();
+    }
+
+    #[test]
+    fn claude_doctor_rejects_missing_hook_configuration() {
+        let root = tempdir().unwrap();
+        let settings = claude::settings_path(root.path());
+        crate::cmd_setup::setup_hooks::write_claude_hook_config(&settings, root.path(), true)
+            .unwrap();
+        fs::write(&settings, "{}\n").unwrap();
+
+        let check = check_claude_hook_config(root.path());
+
+        assert!(!check.ok, "{}", check.detail);
+        assert!(check.detail.contains("missing hooks.SessionStart"));
+    }
+
+    #[test]
+    fn claude_doctor_accepts_generated_relocation_safe_hooks() {
+        let root = tempdir().unwrap();
+        let settings = claude::settings_path(root.path());
+        crate::cmd_setup::setup_hooks::write_claude_hook_config(&settings, root.path(), true)
+            .unwrap();
+
+        let check = check_claude_hook_config(root.path());
+
+        assert!(check.ok, "{}", check.detail);
     }
 
     #[test]

@@ -14,6 +14,7 @@ use crate::cmd_setup_render::{format_setup_badge, SetupBadgeStyle};
 pub(crate) enum SetupIndexVerification {
     Ready(DaemonIndexStatusResponse),
     Building(DaemonIndexStatusResponse),
+    Deferred,
     Failed {
         response: Option<DaemonIndexStatusResponse>,
         reason: String,
@@ -30,7 +31,9 @@ pub(crate) fn verify_setup_index(root: &Path) -> Result<SetupIndexVerification> 
     let mut rendered_progress = None::<String>;
     let first_response = fetch_index_status(root)?;
     match classify_setup_index_status(root, &first_response, false) {
-        SetupIndexVerification::Ready(_) | SetupIndexVerification::Failed { .. } => {
+        SetupIndexVerification::Ready(_)
+        | SetupIndexVerification::Deferred
+        | SetupIndexVerification::Failed { .. } => {
             return Ok(classify_setup_index_status(root, &first_response, false));
         }
         SetupIndexVerification::Building(_) => {
@@ -45,7 +48,9 @@ pub(crate) fn verify_setup_index(root: &Path) -> Result<SetupIndexVerification> 
         std::thread::sleep(SETUP_INDEX_VERIFY_POLL);
         let response = fetch_index_status(root)?;
         match classify_setup_index_status(root, &response, false) {
-            SetupIndexVerification::Ready(_) | SetupIndexVerification::Failed { .. } => {
+            SetupIndexVerification::Ready(_)
+            | SetupIndexVerification::Deferred
+            | SetupIndexVerification::Failed { .. } => {
                 finish_setup_index_progress_line(&mut rendered_progress)?;
                 return Ok(classify_setup_index_status(root, &response, false));
             }
@@ -176,6 +181,21 @@ pub(crate) fn classify_setup_index_status(
 ) -> SetupIndexVerification {
     if setup_index_ready(root, response) {
         return SetupIndexVerification::Ready(response.clone());
+    }
+
+    // Setup itself writes configuration into the working tree. That must not
+    // turn a successful installation into an error or claim the index is ready.
+    if response.manifest.status != DaemonIndexState::Corrupt
+        && response.manifest.regex_status.as_deref() != Some("corrupt")
+        && response
+            .manifest
+            .last_error
+            .as_deref()
+            .is_some_and(|error| {
+                error.contains("full regex index rebuild requires a clean Git working tree")
+            })
+    {
+        return SetupIndexVerification::Deferred;
     }
 
     if let Some(reason) = setup_index_failure_reason(root, response, timed_out) {

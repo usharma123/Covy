@@ -43,6 +43,7 @@ pub mod hooks;
 pub mod index;
 pub mod message;
 pub mod paths;
+pub mod process;
 pub mod registry;
 pub mod task;
 
