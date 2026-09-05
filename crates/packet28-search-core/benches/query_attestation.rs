@@ -1,9 +1,10 @@
 use std::fs;
+use std::hint::black_box;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use packet28_reducer_core::SearchRequest;
 use packet28_search_core::{
     guarded_fallback_reason, guarded_indexed_search, indexed_search,
