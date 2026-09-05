@@ -7,7 +7,7 @@ use crate::broker::{
 };
 use packet28_daemon_protocol::hooks::{
     HookBoundaryKind, HookEventKind, HookIngestRequest, HookIngestResponse, HookReducerCacheEntry,
-    HookRuntimeConfig, RelaunchPreference, ThresholdLevel,
+    HookRuntimeConfig, ThresholdLevel,
 };
 use packet28_daemon_protocol::paths::hook_runtime_config_path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -181,21 +181,17 @@ fn maybe_prepare_handoff_from_hooks(
             task.hook_window_est_bytes = 0;
             persist_task(&guard, task_id)?;
 
-            // Auto-relaunch: when daemon-managed and at a stop boundary with
-            // handoff ready, queue a fresh worker launch.
+            // Auto-relaunch: only when the user explicitly opted into
+            // daemon-managed relaunch with their own command, and only when
+            // the *session* is ending. `SubagentStop` is deliberately excluded:
+            // the parent session is still running, so relaunching there both
+            // duplicates work and spawns a new agent per finished subagent.
             let is_stop_boundary = matches!(
                 boundary_kind,
-                HookBoundaryKind::Stop
-                    | HookBoundaryKind::SubagentStop
-                    | HookBoundaryKind::SessionEnd
+                HookBoundaryKind::Stop | HookBoundaryKind::SessionEnd
             );
-            if is_stop_boundary
-                && matches!(
-                    config.relaunch_preference,
-                    RelaunchPreference::DaemonManaged
-                )
-                && !config.relaunch_command.is_empty()
-            {
+
+            if is_stop_boundary && config.daemon_relaunch_enabled() {
                 match guard
                     .background_tx
                     .try_send(BackgroundCommand::RelaunchAgent {

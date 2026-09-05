@@ -38,6 +38,9 @@ ALLOWED_UNSAFE_FILES = {
     "crates/packet28-daemon-core/src/storage.rs": (
         "test-only resident-memory bound instrumentation"
     ),
+    "crates/packet28-daemon-protocol/src/process.rs": (
+        "pointer-free Unix session detachment and child-process verification"
+    ),
     "crates/packet28-daemon-protocol/src/paths.rs": (
         "effective-user-specific Unix socket namespace"
     ),

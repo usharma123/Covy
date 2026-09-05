@@ -209,6 +209,11 @@ fn summarize_list_entries(label: &str, lines: &[String], noun: &str) -> String {
     if let Some(first) = lines.first() {
         let fields = first.split('\t').collect::<Vec<_>>();
         let preview = fields.iter().take(2).copied().collect::<Vec<_>>().join(" ");
+        let preview = if preview.chars().count() > 80 {
+            format!("{}...", preview.chars().take(77).collect::<String>())
+        } else {
+            preview
+        };
         let state = fields.get(3).copied().filter(|value| !value.is_empty());
         if !preview.is_empty() {
             if let Some(state) = state {
@@ -443,6 +448,16 @@ mod tests {
             reduction.summary,
             "gh pr list: 2 PR(s); first 123 Fix reducer path [OPEN]"
         );
+    }
+
+    #[test]
+    fn list_summary_bounds_long_unicode_titles() {
+        let title = "修".repeat(200);
+        let summary =
+            summarize_list_entries("gh pr list", &[format!("42\t{title}\tbranch\tOPEN")], "PR");
+        assert!(summary.chars().count() < 120);
+        assert!(summary.starts_with("gh pr list: 1 PR(s); first 42 "));
+        assert!(summary.ends_with("... [OPEN]"));
     }
 
     #[test]

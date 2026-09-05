@@ -1,0 +1,72 @@
+{
+  "iterations": 100,
+  "measurements": [
+    {
+      "entries": 128,
+      "nanoseconds_per_expiration_pair": [
+        41492,
+        42852,
+        41643,
+        41735,
+        44935
+      ],
+      "ttl_secs": 0
+    },
+    {
+      "entries": 128,
+      "nanoseconds_per_expiration_pair": [
+        44669,
+        44003,
+        43668,
+        43225,
+        43403
+      ],
+      "ttl_secs": 60
+    },
+    {
+      "entries": 2048,
+      "nanoseconds_per_expiration_pair": [
+        773261,
+        766138,
+        759380,
+        783674,
+        789660
+      ],
+      "ttl_secs": 0
+    },
+    {
+      "entries": 2048,
+      "nanoseconds_per_expiration_pair": [
+        798350,
+        903143,
+        794657,
+        892312,
+        817351
+      ],
+      "ttl_secs": 60
+    },
+    {
+      "entries": 8192,
+      "nanoseconds_per_expiration_pair": [
+        4085245,
+        3754754,
+        3933698,
+        3907140,
+        3598572
+      ],
+      "ttl_secs": 0
+    },
+    {
+      "entries": 8192,
+      "nanoseconds_per_expiration_pair": [
+        4018319,
+        3709169,
+        3695757,
+        3664366,
+        3712842
+      ],
+      "ttl_secs": 60
+    }
+  ],
+  "repeats": 5
+}

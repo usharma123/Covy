@@ -20,6 +20,9 @@ pub enum DetailMode {
     Rich,
 }
 
+/// Limits apply to the serialized assembled payload. If source identifiers and
+/// the required JSON envelope alone exceed either limit, assembly returns that
+/// metadata with `truncated` set and reports its actual cost in `AssemblySummary`.
 #[derive(Debug, Clone)]
 pub struct AssembleOptions {
     pub budget_tokens: u64,
