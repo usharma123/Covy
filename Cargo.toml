@@ -3,7 +3,7 @@ members = ["crates/covy-core", "crates/covy-ingest", "crates/covy-cli", "crates/
 resolver = "2"
 
 [workspace.package]
-version = "0.2.64"
+version = "0.2.66"
 publish = false
 edition = "2021"
 license = "MIT"

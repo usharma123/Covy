@@ -7,10 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
 use serde_json::{json, Value};
 
-use super::setup_commands::{
-    apply_generated_relaunch_command, generated_packet28_hook_command,
-    resolve_packet28_agent_command,
-};
+use super::setup_commands::{apply_generated_relaunch_command, generated_packet28_hook_command};
 use super::McpConfigStatus;
 
 const PACKET28_CLAUDE_HTTP_HOOK_PATH: &str = "/packet28/claude-hook";
@@ -102,7 +99,10 @@ pub(crate) fn write_claude_hook_config(
 
 fn build_claude_packet28_hooks(command: &str, http_url: &str, http_token: &str) -> Value {
     json!({
-        "SessionStart": [claude_command_hook_entry(Some("startup|resume|clear|compact|fork"), command)],
+        "SessionStart": [
+            claude_command_hook_entry(Some("startup|resume|clear|compact"), command),
+            claude_http_hook_entry(Some("fork"), http_url, http_token)
+        ],
         "UserPromptSubmit": [claude_command_hook_entry(None, command)],
         "PreToolUse": [claude_http_hook_entry(Some("*"), http_url, http_token)],
         "PostToolUse": [claude_http_hook_entry(Some("*"), http_url, http_token)],
@@ -555,8 +555,7 @@ pub(crate) fn write_hook_runtime_config(
         packet28_daemon_protocol::hooks::HookRuntimeConfig::default()
     };
     let mut changed = apply_generated_http_hook_settings(&mut config, root);
-    changed |=
-        apply_generated_relaunch_command(&mut config, root, resolve_packet28_agent_command());
+    changed |= apply_generated_relaunch_command(&mut config);
     if existed && !changed {
         return Ok(McpConfigStatus::AlreadyConfigured);
     }

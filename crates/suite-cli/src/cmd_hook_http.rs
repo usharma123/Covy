@@ -15,6 +15,7 @@ use crate::cmd_hook::{process_claude_hook_payload, HookHttpServerArgs};
 
 const CLAUDE_HTTP_HOOK_PATH: &str = "/packet28/claude-hook";
 const CLAUDE_HTTP_HEALTH_PATH: &str = "/packet28/health";
+const CLAUDE_HTTP_SHUTDOWN_PATH: &str = "/packet28/shutdown";
 const CLAUDE_HTTP_TOKEN_HEADER: &str = "x-packet28-hook-token";
 const HOOK_HTTP_START_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_HTTP_HOOK_BODY_BYTES: usize = 8 * 1024 * 1024;
@@ -41,6 +42,10 @@ struct HttpClientResponse {
 
 pub(crate) fn run_hook_http_server(args: HookHttpServerArgs) -> Result<i32> {
     let root = crate::broker_client::resolve_root(&args.root);
+    // This server outlives the hook invocation that spawned it; detach from
+    // that hook's process group/session so host cleanup does not kill it.
+    packet28_daemon_protocol::process::detach_from_parent_session();
+
     let listener = TcpListener::bind(("127.0.0.1", args.port))
         .with_context(|| format!("failed to bind Packet28 hook server on port {}", args.port))?;
     for stream in listener.incoming() {
@@ -77,6 +82,46 @@ pub(crate) fn ensure_hook_http_server(
 pub(crate) fn ensure_hook_http_server_for_root(root: &Path) -> Result<()> {
     let runtime_config = load_hook_http_runtime_config(root)?;
     ensure_hook_http_server(root, &runtime_config)
+}
+
+/// Ask the workspace's hook HTTP server to exit. Returns `Ok(true)` when a
+/// server for this workspace acknowledged the shutdown, `Ok(false)` when no
+/// server for this workspace was reachable.
+pub(crate) fn stop_hook_http_server(root: &Path) -> Result<bool> {
+    let runtime_config = match load_hook_http_runtime_config(root) {
+        Ok(config) => config,
+        Err(_) => return Ok(false),
+    };
+    let Some(settings) = hook_http_settings(&runtime_config) else {
+        return Ok(false);
+    };
+    if !hook_http_server_healthy(root, &settings).unwrap_or(false) {
+        return Ok(false);
+    }
+    let response = send_http_request(
+        settings.port,
+        "POST",
+        CLAUDE_HTTP_SHUTDOWN_PATH,
+        &[(CLAUDE_HTTP_TOKEN_HEADER, settings.token.as_str())],
+        None,
+    )?;
+    if response.status_code != 200 {
+        return Err(anyhow!(
+            "Packet28 hook HTTP server refused shutdown (status {})",
+            response.status_code
+        ));
+    }
+    let start = Instant::now();
+    while start.elapsed() < HOOK_HTTP_START_TIMEOUT {
+        if !hook_http_server_healthy(root, &settings).unwrap_or(false) {
+            return Ok(true);
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    Err(anyhow!(
+        "Packet28 hook HTTP server on port {} is still answering after shutdown",
+        settings.port
+    ))
 }
 
 pub(crate) fn check_hook_http_server(root: &Path) -> Result<()> {
@@ -129,7 +174,7 @@ fn start_hook_http_server(root: &Path, settings: &HookHttpSettings) -> Result<()
         .append(true)
         .open(&log_path)
         .with_context(|| format!("failed to open hook log '{}'", log_path.display()))?;
-    Command::new(exe)
+    let mut child = Command::new(exe)
         .arg("hook")
         .arg("serve-http")
         .arg("--root")
@@ -143,6 +188,16 @@ fn start_hook_http_server(root: &Path, settings: &HookHttpSettings) -> Result<()
         .stderr(Stdio::from(stderr))
         .spawn()
         .context("failed to spawn Packet28 hook HTTP server")?;
+    // Reap the child if it exits while this process is still alive (for
+    // example when a concurrent hook already won the port), so it never sits
+    // around as a zombie until the hook CLI exits.
+    let pid = child.id();
+    thread::Builder::new()
+        .name(format!("packet28-hook-http-reaper-{pid}"))
+        .spawn(move || {
+            let _ = child.wait();
+        })
+        .context("failed to start Packet28 hook HTTP server reaper")?;
     Ok(())
 }
 
@@ -251,6 +306,20 @@ fn handle_hook_http_connection(stream: TcpStream, root: &Path, token: &str) -> R
             };
             let body = outcome.body.unwrap_or_else(|| "{}".to_string());
             write_http_response(&mut stream, 200, "application/json", &body)?;
+        }
+        ("POST", CLAUDE_HTTP_SHUTDOWN_PATH) => {
+            let supplied_token = request
+                .headers
+                .get(CLAUDE_HTTP_TOKEN_HEADER)
+                .map(String::as_str)
+                .unwrap_or_default();
+            if supplied_token != token {
+                write_http_response(&mut stream, 401, "text/plain", "unauthorized")?;
+                return Ok(());
+            }
+            write_http_response(&mut stream, 200, "text/plain", "shutting down")?;
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+            std::process::exit(0);
         }
         _ => {
             write_http_response(&mut stream, 404, "text/plain", "not found")?;

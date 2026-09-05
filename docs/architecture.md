@@ -96,6 +96,12 @@ built-in reducers. See [Context-kernel composition](context-kernel-composition.m
 - standalone compatibility CLIs (`covy`, `diffy`, `testy`, `p28`) expose narrow
   domain workflows.
 
+Within the MCP upstream adapter, `proxy_upstream::reverse_requests` owns
+reverse-request IDs, pending-request and byte limits, batch assembly, and
+completion/timeout accounting. Its state is private. The upstream adapter owns
+child processes, transport I/O, shutdown, and delivery of the returned messages.
+This keeps protocol accounting testable without starting an upstream process.
+
 The `packet28d` binary is intentionally thin. Application lifecycle belongs in
 the library; protocol DTOs do not depend on runtime or storage.
 

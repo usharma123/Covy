@@ -58,6 +58,7 @@ pub mod cmd_shell;
 pub mod cmd_stack;
 pub mod cmd_system;
 pub mod cmd_transcript;
+pub mod cmd_uninstall;
 pub mod cmd_verify;
 pub mod cmd_wakeup;
 pub mod economics;

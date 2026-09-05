@@ -1,0 +1,8 @@
+{
+  "baseline_sha": "b77b4b511667b89075ec4ac89590a2ec2757f8a7",
+  "selected_source": "baseline plus cache.rs changes in the commit containing this record",
+  "toolchain": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: aarch64-apple-darwin\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
+  "host": "macOS-15.7.2-arm64-arm-64bit-Mach-O",
+  "command": "cargo run -p context-memory-core --example cache_expiry_experiment --release --locked",
+  "fixture": "128, 2048, 8192 live entries, fixed timestamp 10000, TTL 0 or 60; 5 repeats of 100 expiration candidate/apply pairs; setup and lookup parity checks outside timing"
+}
